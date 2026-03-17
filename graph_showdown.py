@@ -3,7 +3,7 @@ import argparse
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -32,16 +32,16 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
             holding = "USDT"
         else:
             holding = list(graph.nodes)[0]
-    
-    total_pnl = 0.0
+
+    capital = initial_capital
     n_trades = 0
-    
+
     path_tracking = {}
     quote_tracking = {}
-    
+
     total_loss = 0.0
     n_updates = 0
-    
+
     pm = PortfolioManager(
         mode=pm_mode,
         initial_capital=initial_capital,
@@ -49,124 +49,83 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
     )
     
     bar_idx = start_bar
+    pending_trade: Optional[Tuple[str, str]] = None  # decided at bar t, collected at bar t+1
+    predicted_accels: Dict = {}
+
     while bar_idx < end_bar:
-        # OPPORTUNITY-DRIVEN LOAD: If we hit the end of current memory, pull a new chunk
         if bar_idx >= len(graph.common_timestamps):
             added = graph.hydrate_increment(days=7)
             if added == 0:
                 print(f"Reached end of available history at bar {bar_idx}.")
                 break
-                
+
+        # 1. REVEAL bar t actual data
         edge_accels = graph.update(bar_idx)
-        
-        if bar_idx % 10 == 0:
-            hrm_direction = accel_model.high_level_plan(graph)
-            graph.integrate_hrm_output(hrm_direction)
-        
-        if bar_idx >= 8:
-            predicted_accels = accel_model.predict(graph)
-        else:
-            predicted_accels = {}
-        
-        for edge, pred in predicted_accels.items():
-            if edge in graph.edge_state:
-                graph.edge_state[edge].accel = pred
-        
-        target = graph.best_target()
-        
-        # DEBUG: Dump predictions and routes every 100 bars to see why trades aren't executing
-        if bar_idx > 0 and bar_idx % 100 == 0:
-            print(f"\n[DEBUG] Bar {bar_idx} Holding: {holding} Target: {target}")
-            print(f"[DEBUG] Target Height: {graph.node_state[target].height if target else 0}")
-            paths = graph.dijkstra(holding)
-            if target in paths:
-                print(f"[DEBUG] Path to target: {paths[target]}")
-            else:
-                print(f"[DEBUG] No path to target {target} found in {paths.keys()}")
-            
-        trade = graph.next_hop(holding, target)
-        
-        if pm_mode == 'multi_asset':
-            decisions = pm.rank_all_flows(graph, predicted_accels)
-            
-            if bar_idx > 0 and bar_idx % 100 == 0:
-                print(f"\n[MULTI] Bar {bar_idx}: {len(decisions)} flows ranked")
-            
-            for decision in decisions[:10]:
-                base, quote = decision.base, decision.quote
-                edge = (base, quote)
-                es = graph.edge_state.get(edge)
-                if es and abs(es.velocity) > 1e-6:
-                    trade_value = abs(es.velocity)
-                    pnl = es.velocity - graph.fee_rate
-                    adjusted_pnl = pnl * decision.fraction
-                    total_pnl += adjusted_pnl
-                    n_trades += 1
-                    graph.reinforce(base, quote, adjusted_pnl)
-                    pm.record_pnl(edge, adjusted_pnl)
-                    
-                    if base not in pm.positions:
-                        pm.positions[base] = Position(currency=base, size=0.0, entry_value=1.0)
-                    pm.positions[base].size += trade_value * decision.fraction
-                    
-                    if bar_idx > 0 and bar_idx % 100 == 0:
-                        print(f"  {base}->{quote}: kelly={decision.kelly_fraction:.2f} conf={decision.confidence:.2f} pnl={adjusted_pnl:.4f}")
-        else:
-            decision = pm.decide(graph, holding, trade, predicted_accels)
-            
-            if decision and decision.fraction > 0:
-                base, quote = trade
-                
-                if bar_idx > 0 and bar_idx % 100 == 0:
-                    print(f"[DEBUG] Trade Decision: {base}->{quote} fraction={decision.fraction:.2f} kelly={decision.kelly_fraction:.2f} regime={decision.regime}")
-                
-                es = graph.edge_state.get((base, quote))
-                if es:
-                    pnl = es.velocity - graph.fee_rate
-                    adjusted_pnl = pnl * decision.fraction
-                    
-                    if abs(es.velocity) > 1e-6:
-                        total_pnl += adjusted_pnl
-                        n_trades += 1
-                        
-                        if bar_idx > 0 and bar_idx % 100 == 0:
-                            print(f"[DEBUG] TRADE EXECUTED: {base}->{quote} at tick {bar_idx} | PnL: {adjusted_pnl:.6f} (fraction: {decision.fraction})")
-                        
-                        graph.reinforce(base, quote, adjusted_pnl)
-                        pm.record_pnl((base, quote), adjusted_pnl)
-                    
-                    if quote not in quote_tracking:
-                        quote_tracking[quote] = {'n_trades': 0, 'pnl': 0.0}
-                    quote_tracking[quote]['n_trades'] += 1
-                    quote_tracking[quote]['pnl'] += adjusted_pnl
-                    
-                    paths = graph.dijkstra(holding)
-                    if target and target in paths and len(paths[target][1]) > 2:
-                        full_path = "->".join(paths[target][1])
-                        if full_path not in path_tracking:
-                            path_tracking[full_path] = {'n_uses': 0, 'pnl': 0.0}
-                        path_tracking[full_path]['n_uses'] += 1
-                        path_tracking[full_path]['pnl'] += adjusted_pnl
-                    
-                    holding = quote
-                
-        # Accel model online gradient descent - trains EVERY bar to predict the environment
+
+        # 2. COLLECT PnL for trade decided at bar t-1 (actual bar t return now known)
+        if pending_trade is not None:
+            base, quote = pending_trade
+            es = graph.edge_state.get((base, quote))
+            if es:
+                rate = es.velocity - graph.fee_rate  # always collect — positive or negative
+                capital *= (1 + rate)
+                n_trades += 1
+                graph.reinforce(base, quote, rate)
+                pm.record_pnl((base, quote), rate)
+
+                if quote not in quote_tracking:
+                    quote_tracking[quote] = {'n_trades': 0, 'pnl': 0.0}
+                quote_tracking[quote]['n_trades'] += 1
+                quote_tracking[quote]['pnl'] += rate
+                holding = quote  # always move — no retroactive undo
+
+        # 3. TRAIN on bar t (no future leakage — bar t is now fully known)
         loss = accel_model.update(graph, edge_accels, bar_idx)
         if loss is not None:
             total_loss += loss
             n_updates += 1
-        
+
+        # 4. PREDICT bar t+1 using model trained through bar t
+        if bar_idx % 10 == 0:
+            hrm_direction = accel_model.high_level_plan(graph)
+            graph.integrate_hrm_output(hrm_direction)
+
+        if bar_idx >= 8:
+            predicted_accels = accel_model.predict(graph)
+            for edge, pred in predicted_accels.items():
+                if edge in graph.edge_state:
+                    graph.edge_state[edge].accel = pred
+            graph._compute_heights(predicted_accels)
+
+        # 5. DECIDE trade for bar t+1 based solely on predictions
+        target = graph.best_target()
+        candidate = graph.next_hop(holding, target)
+        if candidate is not None and predicted_accels.get(candidate, 0) > 0:
+            pending_trade = candidate
+        else:
+            pending_trade = None  # no positive signal — hold
+
+        if pending_trade is not None:
+            paths = graph.dijkstra(holding)
+            if target and target in paths and len(paths[target][1]) > 2:
+                full_path = "->".join(paths[target][1])
+                if full_path not in path_tracking:
+                    path_tracking[full_path] = {'n_uses': 0, 'pnl': 0.0}
+                path_tracking[full_path]['n_uses'] += 1
+
+        if capital < initial_capital * 0.05:
+            print(f"Ruin floor hit at bar {bar_idx}: capital=${capital:.2f}. Stopping.")
+            break
+
         if bar_idx % print_every == 0 and bar_idx > 0:
             avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-            pm_stats = pm.get_stats(graph)
-            usd_value = pm_stats.get('total_value_usd', pm_stats['total_value'])
-            print(f"Bar {bar_idx}: PnL={total_pnl:.4f}, trades={n_trades}, USD={usd_value:.2f}, loss={avg_loss:.6f}")
+            print(f"Bar {bar_idx}: capital=${capital:.2f} ({capital-initial_capital:+.2f}), trades={n_trades}, loss={avg_loss:.6f}")
             top5 = graph.node_potentials()[:5]
             print(f"  Top nodes: {[(c, f'{h:.4f}') for h, c in top5]}")
-        
+
         bar_idx += 1
     
-    return total_pnl, n_trades, path_tracking, quote_tracking
+    return capital, n_trades, path_tracking, quote_tracking
 
 
 def run_autoresearch(graph: CoinGraph, max_minutes: int = 5, pm_mode: str = 'single_asset'):
@@ -238,7 +197,7 @@ def main():
     parser.add_argument('--pm-mode', type=str, default='single_asset', 
                         choices=['single_asset', 'fractional', 'multi_asset'],
                         help='Portfolio manager mode: single_asset (one trade), fractional (Kelly), multi_asset (rank all flows)')
-    parser.add_argument('--initial-capital', type=float, default=10000.0)
+    parser.add_argument('--initial-capital', type=float, default=100.0)
     args = parser.parse_args()
     
     print("Loading coin graph...")
@@ -269,10 +228,10 @@ def main():
         )
         
         print(f"\n=== Final Results ===")
-        print(f"Total PnL: {total_pnl:.4f}")
+        print(f"Start: ${args.initial_capital:.2f}  End: ${total_pnl:.2f}  Gain: {(total_pnl/args.initial_capital - 1)*100:+.2f}%")
         print(f"Number of trades: {n_trades}")
         if n_trades > 0:
-            print(f"Avg PnL per trade: {total_pnl/n_trades:.6f}")
+            print(f"Avg gain per trade: {(total_pnl/args.initial_capital - 1)*100/n_trades:+.4f}%")
         
         print("\n=== Node Potentials (Top 10) ===")
         for h, c in graph.node_potentials()[:10]:
@@ -287,12 +246,12 @@ def main():
         print("\n=== Multi-Hop Path Stats ===")
         sorted_paths = sorted(paths.items(), key=lambda x: x[1]['pnl'], reverse=True)
         for p, s in sorted_paths[:5]:
-            print(f"  {p}: {s['n_uses']} uses, {s['pnl']:.4f} PnL")
-            
+            print(f"  {p}: {s['n_uses']} uses, {s['pnl']*100:+.3f}% total rate")
+
         print("\n=== Quote Routing Efficiency ===")
         sorted_quotes = sorted(quotes.items(), key=lambda x: x[1]['pnl'], reverse=True)
         for q, s in sorted_quotes[:5]:
-            print(f"  {q}: {s['n_trades']} trades, {s['pnl']:.4f} aggregated PnL")
+            print(f"  {q}: {s['n_trades']} trades, {s['pnl']*100:+.3f}% total rate")
 
 
 if __name__ == "__main__":

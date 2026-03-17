@@ -92,7 +92,7 @@ class CoinGraph:
             self.edges[(quote, base)] = df
             
             self.edge_state[(base, quote)] = EdgeState(base=base, quote=quote)
-            self.edge_state[(quote, base)] = EdgeState(base=quote, quote=base)
+            self.edge_state[(quote, base)] = EdgeState(base=base, quote=quote)  # original direction — triggers negation in update()
             
             self.node_state.setdefault(base, NodeState(currency=base))
             self.node_state.setdefault(quote, NodeState(currency=quote))
@@ -309,9 +309,9 @@ class CoinGraph:
     def next_hop(self, holding: str, target: Optional[str] = None) -> Optional[Tuple[str, str]]:
         if target is None:
             target = self.best_target()
-        
+
         if target is None or holding == target:
-            return self._random_hop(holding)
+            return None  # already at target — stay put, pay no fee
         
         paths = self.dijkstra(holding)
         
@@ -347,10 +347,10 @@ class CoinGraph:
         es.last_pnl = pnl
         
         if pnl > 0:
-            es.conductance *= 1.05
+            es.conductance *= 1.02
             es.wins += 1
         else:
-            es.conductance *= 0.97
+            es.conductance *= 0.90
             es.losses += 1
         
         es.conductance = np.clip(es.conductance, 0.01, 10.0)
