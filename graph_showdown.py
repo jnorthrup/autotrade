@@ -9,6 +9,7 @@ import numpy as np
 
 from accel_model import AccelModel
 from coin_graph import CoinGraph
+from portfolio_manager import PortfolioManager, Position
 
 
 # deleted DB_PATH
@@ -18,7 +19,8 @@ from coin_graph import CoinGraph
 
 
 def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0, 
-                   end_bar: Optional[int] = None, print_every: int = 100):
+                   end_bar: Optional[int] = None, print_every: int = 100,
+                   pm_mode: str = 'single_asset', initial_capital: float = 10000.0):
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
     
@@ -40,6 +42,12 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
     total_loss = 0.0
     n_updates = 0
     
+    pm = PortfolioManager(
+        mode=pm_mode,
+        initial_capital=initial_capital,
+        fee_rate=graph.fee_rate
+    )
+    
     bar_idx = start_bar
     while bar_idx < end_bar:
         # OPPORTUNITY-DRIVEN LOAD: If we hit the end of current memory, pull a new chunk
@@ -57,10 +65,12 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
         
         if bar_idx >= 8:
             predicted_accels = accel_model.predict(graph)
-            # Bind the model's predictions back into the graph's edge states so Dijkstra can see them
-            for edge, pred in predicted_accels.items():
-                if edge in graph.edge_state:
-                    graph.edge_state[edge].accel = pred
+        else:
+            predicted_accels = {}
+        
+        for edge, pred in predicted_accels.items():
+            if edge in graph.edge_state:
+                graph.edge_state[edge].accel = pred
         
         target = graph.best_target()
         
@@ -76,55 +86,81 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
             
         trade = graph.next_hop(holding, target)
         
-        if trade:
-            base, quote = trade
-            if bar_idx > 0 and bar_idx % 100 == 0:
-                print(f"[DEBUG] Raw Trade Tuple: {trade}")
-            ts = graph.common_timestamps[bar_idx]
+        if pm_mode == 'multi_asset':
+            decisions = pm.rank_all_flows(graph, predicted_accels)
             
-            es = graph.edge_state.get((base, quote))
-            if es:
-                # We can just use the graph's natively tracked velocity for PnL!
-                # The velocity represents the actual price shift (log return) over the current bar.
-                # It handles inversion perfectly within CoinGraph.update() natively.
-                pnl = es.velocity - graph.fee_rate
-                
-                # Check absolute values so we don't accidentally execute trades on total zero-volume ticks
-                if abs(es.velocity) > 1e-6:
-                    total_pnl += pnl
+            if bar_idx > 0 and bar_idx % 100 == 0:
+                print(f"\n[MULTI] Bar {bar_idx}: {len(decisions)} flows ranked")
+            
+            for decision in decisions[:10]:
+                base, quote = decision.base, decision.quote
+                edge = (base, quote)
+                es = graph.edge_state.get(edge)
+                if es and abs(es.velocity) > 1e-6:
+                    trade_value = abs(es.velocity)
+                    pnl = es.velocity - graph.fee_rate
+                    adjusted_pnl = pnl * decision.fraction
+                    total_pnl += adjusted_pnl
                     n_trades += 1
+                    graph.reinforce(base, quote, adjusted_pnl)
+                    pm.record_pnl(edge, adjusted_pnl)
+                    
+                    if base not in pm.positions:
+                        pm.positions[base] = Position(currency=base, size=0.0, entry_value=1.0)
+                    pm.positions[base].size += trade_value * decision.fraction
                     
                     if bar_idx > 0 and bar_idx % 100 == 0:
-                        print(f"[DEBUG] TRADE EXECUTED: {base}->{quote} at tick {bar_idx} | PnL: {pnl:.6f}")
+                        print(f"  {base}->{quote}: kelly={decision.kelly_fraction:.2f} conf={decision.confidence:.2f} pnl={adjusted_pnl:.4f}")
+        else:
+            decision = pm.decide(graph, holding, trade, predicted_accels)
+            
+            if decision and decision.fraction > 0:
+                base, quote = trade
+                
+                if bar_idx > 0 and bar_idx % 100 == 0:
+                    print(f"[DEBUG] Trade Decision: {base}->{quote} fraction={decision.fraction:.2f} kelly={decision.kelly_fraction:.2f} regime={decision.regime}")
+                
+                es = graph.edge_state.get((base, quote))
+                if es:
+                    pnl = es.velocity - graph.fee_rate
+                    adjusted_pnl = pnl * decision.fraction
                     
-                    graph.reinforce(base, quote, pnl)
+                    if abs(es.velocity) > 1e-6:
+                        total_pnl += adjusted_pnl
+                        n_trades += 1
+                        
+                        if bar_idx > 0 and bar_idx % 100 == 0:
+                            print(f"[DEBUG] TRADE EXECUTED: {base}->{quote} at tick {bar_idx} | PnL: {adjusted_pnl:.6f} (fraction: {decision.fraction})")
+                        
+                        graph.reinforce(base, quote, adjusted_pnl)
+                        pm.record_pnl((base, quote), adjusted_pnl)
                     
-                    # Track Quote Stats
                     if quote not in quote_tracking:
                         quote_tracking[quote] = {'n_trades': 0, 'pnl': 0.0}
                     quote_tracking[quote]['n_trades'] += 1
-                    quote_tracking[quote]['pnl'] += pnl
+                    quote_tracking[quote]['pnl'] += adjusted_pnl
                     
-                # Track Multi-Hop Path Attempt
-                paths = graph.dijkstra(holding)
-                if target and target in paths and len(paths[target][1]) > 2:
-                    full_path = "->".join(paths[target][1])
-                    if full_path not in path_tracking:
-                        path_tracking[full_path] = {'n_uses': 0, 'pnl': 0.0}
-                    path_tracking[full_path]['n_uses'] += 1
-                    path_tracking[full_path]['pnl'] += pnl
-                
-                holding = quote
+                    paths = graph.dijkstra(holding)
+                    if target and target in paths and len(paths[target][1]) > 2:
+                        full_path = "->".join(paths[target][1])
+                        if full_path not in path_tracking:
+                            path_tracking[full_path] = {'n_uses': 0, 'pnl': 0.0}
+                        path_tracking[full_path]['n_uses'] += 1
+                        path_tracking[full_path]['pnl'] += adjusted_pnl
+                    
+                    holding = quote
                 
         # Accel model online gradient descent - trains EVERY bar to predict the environment
-        loss = accel_model.update(graph, edge_accels)
+        loss = accel_model.update(graph, edge_accels, bar_idx)
         if loss is not None:
             total_loss += loss
             n_updates += 1
         
         if bar_idx % print_every == 0 and bar_idx > 0:
             avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-            print(f"Bar {bar_idx}: PnL={total_pnl:.4f}, trades={n_trades}, holding={holding}, loss={avg_loss:.6f}")
+            pm_stats = pm.get_stats(graph)
+            usd_value = pm_stats.get('total_value_usd', pm_stats['total_value'])
+            print(f"Bar {bar_idx}: PnL={total_pnl:.4f}, trades={n_trades}, USD={usd_value:.2f}, loss={avg_loss:.6f}")
             top5 = graph.node_potentials()[:5]
             print(f"  Top nodes: {[(c, f'{h:.4f}') for h, c in top5]}")
         
@@ -133,7 +169,7 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
     return total_pnl, n_trades, path_tracking, quote_tracking
 
 
-def run_autoresearch(graph: CoinGraph, max_minutes: int = 5):
+def run_autoresearch(graph: CoinGraph, max_minutes: int = 5, pm_mode: str = 'single_asset'):
     import duckdb
     import random
     
@@ -145,30 +181,28 @@ def run_autoresearch(graph: CoinGraph, max_minutes: int = 5):
     print("\nStarting infinite autoresearch loop. Press Ctrl+C to stop.")
     try:
         while True:
-            # Randomly sample ML hyperparameters
             lr = 10 ** random.uniform(-4, -1.5)
             width = random.choice([32, 64, 128, 256])
+            y_depth = random.choice([100, 200, 300, 400])
+            x_pixels = random.choice([10, 15, 20, 30])
+            curvature = random.uniform(0.5, 4.0)
             
-            # time_constant (curvature): 1.1 is very slow shallow decay, 2.0 is sharp fisheye
-            time_constant = random.uniform(1.1, 2.0)
-            
-            # sequence length for history horizon
-            seq_len = random.choice([8, 12, 16, 24]) 
-            
-            params = {'lr': lr, 'width': width, 'seq_len': seq_len, 'time_constant': time_constant}
+            params = {'lr': lr, 'width': width, 'y_depth': y_depth, 'x_pixels': x_pixels, 'curvature': curvature}
             print(f"\n--- Autoresearch Epoch ---")
-            print(f"Testing: lr={lr:.5f}, width={width}, seq_len={seq_len}, time_constant={time_constant:.3f}")
+            print(f"Testing: lr={lr:.5f}, width={width}, y_depth={y_depth}, x_pixels={x_pixels}, curvature={curvature:.3f}")
             
             accel_model = AccelModel(
                 n_edges=len(graph.edges),
-                sequence_length=params['seq_len'],
+                sequence_length=params['x_pixels'],
                 learning_rate=params['lr'],
                 hidden_dim=params['width'],
-                time_constant=params['time_constant']
+                y_depth=params['y_depth'],
+                x_pixels=params['x_pixels'],
+                curvature=params['curvature']
             )
             accel_model.register_edges(list(graph.edges.keys()))
             
-            pnl, n_trades, _, _ = run_simulation(graph, accel_model, print_every=1000)
+            pnl, n_trades, _, _ = run_simulation(graph, accel_model, print_every=1000, pm_mode=pm_mode)
             
             if n_trades > 0:
                 val_bpb = -pnl / n_trades
@@ -201,6 +235,10 @@ def main():
     parser.add_argument('--start-bar', type=int, default=0)
     parser.add_argument('--end-bar', type=int, default=None)
     parser.add_argument('--print-every', type=int, default=100)
+    parser.add_argument('--pm-mode', type=str, default='single_asset', 
+                        choices=['single_asset', 'fractional', 'multi_asset'],
+                        help='Portfolio manager mode: single_asset (one trade), fractional (Kelly), multi_asset (rank all flows)')
+    parser.add_argument('--initial-capital', type=float, default=10000.0)
     args = parser.parse_args()
     
     print("Loading coin graph...")
@@ -212,7 +250,7 @@ def main():
         print("No data loaded. Run fetch_candles.py first.")
         return
     
-    accel_model = AccelModel(n_edges=len(graph.edges), sequence_length=8, time_constant=1.5)
+    accel_model = AccelModel(n_edges=len(graph.edges), sequence_length=8, y_depth=200, x_pixels=20, curvature=2.0)
     accel_model.register_edges(list(graph.edges.keys()))
     
     if args.autoresearch:
@@ -225,7 +263,9 @@ def main():
             graph, accel_model, 
             start_bar=args.start_bar, 
             end_bar=end_bar,
-            print_every=args.print_every
+            print_every=args.print_every,
+            pm_mode=args.pm_mode,
+            initial_capital=args.initial_capital
         )
         
         print(f"\n=== Final Results ===")

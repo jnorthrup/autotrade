@@ -31,6 +31,9 @@ class EdgeState:
     long_term_memory: List[float] = field(default_factory=list)
     streak: int = 0
     temperature: float = 1.0
+    volatility_window: List[float] = field(default_factory=list)
+    wins: int = 0
+    losses: int = 0
 
 
 @dataclass
@@ -345,10 +348,16 @@ class CoinGraph:
         
         if pnl > 0:
             es.conductance *= 1.05
+            es.wins += 1
         else:
             es.conductance *= 0.97
+            es.losses += 1
         
         es.conductance = np.clip(es.conductance, 0.01, 10.0)
+        
+        es.volatility_window.append(abs(es.velocity))
+        if len(es.volatility_window) > 20:
+            es.volatility_window.pop(0)
 
     def node_potentials(self) -> List[Tuple[float, str]]:
         return sorted([(ns.height, currency) for currency, ns in self.node_state.items()], reverse=True)
