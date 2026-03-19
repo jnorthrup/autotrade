@@ -1,35 +1,40 @@
+# Environments
+.venv/
+node_modules/
+.env
+
 # Python
 __pycache__/
 *.py[cod]
-*.so
-*.egg-info/
-*.egg
-
-# Virtual environments
-venv/
-env/
-.venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-
-# Secrets
-.env
+*$py.class
 
 # Data
-*.db
-*.csv
-*.json
-*.pickle
-*.pkl
-candle_cache_5m/
+candles.duckdb
+candles.duckdb.*
+candle_partitions/
+bag.json
+*.tsv
+results.tsv
 
-# Logs
-*.log
-*.out
+# Binaries & Libraries
+*.dylib
+*.o
+*.a
+*.so
+build/
+dist/
+
+# System
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project
+autotrade.bundle
+velocity_model.pt
+token_bytes.pt
+tokenizer.duckdb
