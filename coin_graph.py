@@ -1,5 +1,4 @@
 import heapq
-import pickle
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -49,6 +48,7 @@ class CoinGraph:
     def __init__(self, fee_rate: float = 0.001):
         self.fee_rate = fee_rate
         self.nodes: Set[str] = set()
+        self.all_pairs: List[str] = []  # all discovered product_ids
         self.edges: Dict[Tuple[str, str], pd.DataFrame] = {}
         self.edge_state: Dict[Tuple[str, str], EdgeState] = {}
         self.node_state: Dict[str, NodeState] = {}
@@ -56,47 +56,91 @@ class CoinGraph:
         self._accel_history: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self._history_window = 32
 
-    def load(self, db_path: Optional[str] = None, granularity: str = None) -> int:
+    def load(self, db_path: Optional[str] = None, granularity: str = None,
+             min_partners: int = 5, max_partners: Optional[int] = None,
+             lookback_days: int = 365, refresh_bag: bool = False) -> int:
         db_path = db_path or str(Config.DB_PATH)
         granularity = granularity or Config.DEFAULT_GRANULARITY
-        
+
         self.cache = CandleCache(db_path)
-        
-        import duckdb
-        if not Path(db_path).exists():
-            print(f"Database {db_path} not found.")
-            return 0
+
+        pairs = []
+        if not refresh_bag and Config.BAG_PATH.exists():
+            try:
+                import json
+                with open(Config.BAG_PATH, 'r') as f:
+                    pairs = json.load(f)
+                print(f"Loaded bag of {len(pairs)} pairs from {Config.BAG_PATH}")
+            except Exception as e:
+                print(f"Error loading bag: {e}, falling back to discovery.")
+                pairs = []
+
+        if not pairs:
+            # Discover real graph from Coinbase live products
+            resp = self.cache.client.get_public_products()
+            adjacency = {}
+            real_products = set()  # actual product_ids from Coinbase
+            for p in resp.products:
+                if p.status != "online" or p.trading_disabled:
+                    continue
+                parts = p.product_id.split("-", 1)
+                if len(parts) != 2:
+                    continue
+                base, quote = parts
+                real_products.add(p.product_id)
+                adjacency.setdefault(base, set()).add(quote)
+                adjacency.setdefault(quote, set()).add(base)
+
+            coin_set = {
+                c for c, partners in adjacency.items() 
+                if len(partners) >= min_partners and (max_partners is None or len(partners) <= max_partners)
+            }
+
+            seen = set()
+            for pid in real_products:
+                base, quote = pid.split("-", 1)
+                if base in coin_set and quote in coin_set:
+                    canonical = tuple(sorted([base, quote]))
+                    if canonical not in seen:
+                        seen.add(canonical)
+                        pairs.append(pid)  # use actual Coinbase product_id
             
-        self.cache = CandleCache(db_path)
-        
-        products = self.cache.list_products(granularity)
-            
-        for product_id in products:
-            if "-" not in product_id:
-                continue
-                
+            # Persist the bag
+            try:
+                import json
+                with open(Config.BAG_PATH, 'w') as f:
+                    json.dump(pairs, f, indent=4)
+                print(f"Saved bag of {len(pairs)} pairs to {Config.BAG_PATH}")
+            except Exception as e:
+                print(f"Error saving bag: {e}")
+
+        self.all_pairs = pairs
+        print(f"Graph discovery complete: {len(pairs)} pairs")
+
+        end = datetime.now()
+        start = end - timedelta(days=lookback_days)
+
+        if lookback_days <= 2:
+            # Live mode: one WS connection, subscribe all pairs to candles, collect snapshots
+            self.cache.ws_snapshot(pairs, granularity)
+        else:
+            self.cache.prefetch_all(pairs, start, end, granularity)
+
+        for product_id in pairs:
             base, quote = product_id.split("-", 1)
-            self.nodes.add(base)
-            self.nodes.add(quote)
-            
-            # FAST LOAD: Just query what the DB has right now
-            df = self.cache.query(f"SELECT * FROM candles WHERE product_id = ? AND granularity = ? ORDER BY timestamp", 
-                                 [product_id, granularity])
-            
+            df = self.cache.get_candles(product_id, start, end, granularity)
             if df.empty:
                 continue
-                
             df = df.set_index('timestamp')
+            self.nodes.add(base)
+            self.nodes.add(quote)
             self.edges[(base, quote)] = df
-            # Explicitly register the reverse edge so Dijkstra can construct full paths natively
             self.edges[(quote, base)] = df
-            
             self.edge_state[(base, quote)] = EdgeState(base=base, quote=quote)
-            self.edge_state[(quote, base)] = EdgeState(base=base, quote=quote)  # original direction — triggers negation in update()
-            
+            self.edge_state[(quote, base)] = EdgeState(base=base, quote=quote)
             self.node_state.setdefault(base, NodeState(currency=base))
             self.node_state.setdefault(quote, NodeState(currency=quote))
-        
+
         self._align_timestamps()
         return len(self.common_timestamps)
 
@@ -241,18 +285,6 @@ class CoinGraph:
             if ns.height > 0:
                 ns.time_at_north += 1
 
-    def edge_weight(self, base: str, quote: str) -> float:
-        edge = (base, quote)
-        if edge not in self.edge_state:
-            return float('inf')
-        
-        es = self.edge_state[edge]
-        
-        # We don't artificially clip the model's prediction here anymore as it prevents routing.
-        # The PyTorch model prediction naturally provides the scale, and the conductance scales it.
-        w = self.fee_rate - es.accel * es.conductance
-        return max(0.0001, w)
-
     def dijkstra(self, source: str) -> Dict[str, Tuple[float, List[str]]]:
         if source not in self.nodes:
             return {}
@@ -350,7 +382,7 @@ class CoinGraph:
             es.conductance *= 1.02
             es.wins += 1
         else:
-            es.conductance *= 0.90
+            es.conductance *= 0.95
             es.losses += 1
         
         es.conductance = np.clip(es.conductance, 0.01, 10.0)
@@ -390,26 +422,51 @@ class CoinGraph:
             })
         return stats
 
-    def hr_high_level_plan(self) -> Dict[str, str]:
+    def high_level_plan(self) -> Dict[str, str]:
         potentials = self.node_potentials()
         
         if not potentials:
             return {}
         
-        median_height = np.median([p[0] for p in potentials])
+        median_height = np.median([p[0] for p in potentials]) if potentials else 0.0
+        std_height = np.std([p[0] for p in potentials]) if len(potentials) > 1 else 1.0
         
         direction = {}
         for height, currency in potentials:
-            if height > median_height * 1.5:
+            z_score = (height - median_height) / (std_height + 1e-8)
+            if z_score > 1.5:
                 direction[currency] = "north"
-            elif height < median_height * 0.5:
+            elif z_score < -1.5:
                 direction[currency] = "south"
             else:
                 direction[currency] = "neutral"
         
         return direction
 
+    def low_level_execute(self, holding: str, predicted_accels: Dict[Tuple[str, str], float]) -> Optional[Tuple[str, str]]:
+        target = self.best_target()
+        
+        if target is None or holding == target:
+            return None
+        
+        paths = self.dijkstra(holding)
+        
+        if target not in paths or len(paths[target][1]) < 2:
+            return self._random_hop(holding)
+        
+        path = paths[target][1]
+        
+        next_edge = (path[0], path[1])
+        
+        if predicted_accels.get(next_edge, 0) > 0:
+            return next_edge
+        
+        return self._random_hop(holding)
+
     def integrate_hrm_output(self, hrm_direction: Dict[str, str]):
+        if not hasattr(self, '_hrm_penalty'):
+            self._hrm_penalty = {}
+        
         for edge, es in self.edge_state.items():
             base, quote = edge
             
@@ -418,12 +475,29 @@ class CoinGraph:
             
             penalty = 0.0
             if base_dir == "south" and quote_dir == "north":
-                penalty = 0.001
+                penalty = 0.002
             elif base_dir == "north" and quote_dir == "south":
-                penalty = -0.001
+                penalty = -0.002
+            elif base_dir == "south" and quote_dir == "south":
+                penalty = 0.0005
+            elif base_dir == "north" and quote_dir == "north":
+                penalty = -0.0005
             
-            self._hrm_penalty = getattr(self, '_hrm_penalty', {})
             self._hrm_penalty[edge] = penalty
+
+    def edge_weight(self, base: str, quote: str) -> float:
+        edge = (base, quote)
+        if edge not in self.edge_state:
+            return float('inf')
+        
+        es = self.edge_state[edge]
+        
+        w = self.fee_rate - es.accel * es.conductance
+        
+        if hasattr(self, '_hrm_penalty') and edge in self._hrm_penalty:
+            w += self._hrm_penalty[edge]
+        
+        return max(0.0001, w)
 
 
 if __name__ == "__main__":

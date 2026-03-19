@@ -12,6 +12,7 @@ class Config:
     
     # Database
     DB_PATH = Path(os.getenv("DB_PATH", "candles.duckdb")).resolve()
+    BAG_PATH = Path(os.getenv("BAG_PATH", "bag.json")).resolve()
     
     # Defaults
     DEFAULT_GRANULARITY = os.getenv("DEFAULT_GRANULARITY", "300")

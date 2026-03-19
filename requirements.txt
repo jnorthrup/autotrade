@@ -1,4 +1,11 @@
 coinbase-advanced-py
+coinbase-websocket-sdk
 pandas
 numpy
 torch
+duckdb
+python-dotenv
+tiktoken
+rustbpe
+pyarrow
+requests

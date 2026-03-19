@@ -424,37 +424,46 @@ class AccelModel:
                         self._close_buffer[edge] = [close]
 
     def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1) -> Optional[float]:
-        """Update GAT with actual velocities."""
+        """Update GAT with actual velocities and calculate HRM reliability (pain/reward)."""
         if not self.edge_names or not actual_accels or not self.edge_list:
             return None
 
         self.update_prices(graph, bar_idx)
 
-        for edge, accel in actual_accels.items():
-            if edge in self._accel_buffer:
-                self._accel_buffer[edge].append(accel)
-                if len(self._accel_buffer[edge]) > self._max_history:
-                    self._accel_buffer[edge] = self._accel_buffer[edge][-self._max_history:]
-            else:
-                self._accel_buffer[edge].append(accel)
+        # 1. LOW-LEVEL: Update Predictor (GAT) - Oracle learns price ONLY
+        edge_features = self._build_input_tensor(graph)
+        target = [actual_accels.get(edge, 0.0) for edge in self.edge_names]
+        target_t = torch.tensor(target, dtype=torch.float32).unsqueeze(0)
 
-        edge_features = self._build_input_tensor(graph)  # (1, n_edges, 24)
-
-        # Build target tensor
-        target = []
-        for edge in self.edge_names:
-            target.append(actual_accels.get(edge, 0.0))
-
-        target_t = torch.tensor(target, dtype=torch.float32).unsqueeze(0)  # (1, n_edges)
-
-        # Forward pass through GAT
         self.velocity_optimizer.zero_grad()
-        velocities = self.gat(edge_features, self.edge_list, len(self.node_names))  # (1, n_edges)
-
+        velocities = self.gat(edge_features, self.edge_list, len(self.node_names))
+        
         loss = self.mse_criterion(velocities, target_t)
         loss.backward()
         nn.utils.clip_grad_norm_(self.gat.parameters(), 1.0)
         self.velocity_optimizer.step()
+
+        # 2. HIGH-LEVEL: HRM Reasoning - Learn from "Pain" (actual results)
+        with torch.no_grad():
+            preds = velocities.squeeze(0).tolist()
+            
+        for i, edge in enumerate(self.edge_names):
+            base, quote = edge
+            actual = actual_accels.get(edge, 0.0)
+            pred = preds[i]
+            
+            # Record results for HRM nodes
+            if base in self.hrm_state:
+                self.hrm_state[base].predictions.append(pred)
+                self.hrm_state[base].actuals.append(actual)
+                if len(self.hrm_state[base].predictions) > 100:
+                    self.hrm_state[base].predictions.pop(0)
+                    self.hrm_state[base].actuals.pop(0)
+                
+                # Accuracy: correlation between prediction and actual over recent window
+                if len(self.hrm_state[base].predictions) > 10:
+                    corr = np.corrcoef(self.hrm_state[base].predictions, self.hrm_state[base].actuals)[0, 1]
+                    self.hrm_state[base].low_level_accuracy = 0.0 if np.isnan(corr) else corr
 
         # Also update fisheye parameters
         if self._curve_optimizer is not None:

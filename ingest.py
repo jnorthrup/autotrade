@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import duckdb
 import requests
+from coinbase.rest import RESTClient
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -44,22 +45,7 @@ class CandleIngestor:
         self.running = True
     
     def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS candles (
-                product_id VARCHAR,
-                timestamp TIMESTAMP,
-                open DOUBLE,
-                high DOUBLE,
-                low DOUBLE,
-                close DOUBLE,
-                volume DOUBLE,
-                granularity VARCHAR,
-                PRIMARY KEY (product_id, timestamp, granularity)
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_product ON candles(product_id)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_time ON candles(timestamp)")
-        
+        # We don't create the candles table anymore - CandleCache handles it via VIEW
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 product_id VARCHAR PRIMARY KEY,
@@ -181,13 +167,7 @@ class CandleIngestor:
             return 0
         
         df = pd.DataFrame(candles)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
-        self.db.execute("""
-            INSERT OR REPLACE INTO candles 
-            SELECT * FROM df
-        """)
-        
+        self.cache.save_candles(df)
         return len(candles)
     
     def ingest_product(self, product_id, days=365, granularity="300"):

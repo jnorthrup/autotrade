@@ -14,7 +14,6 @@ import sys
 import time
 import math
 import argparse
-import pickle
 from multiprocessing import Pool
 
 import requests
@@ -22,6 +21,8 @@ import pyarrow.parquet as pq
 import rustbpe
 import tiktoken
 import torch
+import duckdb
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Constants (fixed, do not modify)
@@ -139,11 +140,11 @@ def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
 
 
 def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
-    tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
+    """Train BPE tokenizer using rustbpe, save as DuckDB database."""
+    tokenizer_db = os.path.join(TOKENIZER_DIR, "tokenizer.duckdb")
     token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
 
-    if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
+    if os.path.exists(tokenizer_db) and os.path.exists(token_bytes_path):
         print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
         return
 
@@ -174,12 +175,26 @@ def train_tokenizer():
         special_tokens=special_tokens,
     )
 
-    # Save tokenizer
-    with open(tokenizer_pkl, "wb") as f:
-        pickle.dump(enc, f)
+    # Save tokenizer to DuckDB
+    with duckdb.connect(tokenizer_db) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata (name VARCHAR, pat_str VARCHAR)")
+        conn.execute("DELETE FROM metadata")
+        conn.execute("INSERT INTO metadata VALUES (?, ?)", [enc.name, enc.get_pattern()])
+        
+        conn.execute("CREATE TABLE IF NOT EXISTS merges (token BLOB, rank INTEGER)")
+        conn.execute("DELETE FROM merges")
+        merges = list(enc.get_mergeable_ranks().items())
+        merges_df = pd.DataFrame(merges, columns=['token', 'rank'])
+        conn.execute("INSERT INTO merges SELECT * FROM merges_df")
+        
+        conn.execute("CREATE TABLE IF NOT EXISTS specials (token VARCHAR, rank INTEGER)")
+        conn.execute("DELETE FROM specials")
+        specials = list(enc.get_special_tokens_dict().items())
+        specials_df = pd.DataFrame(specials, columns=['token', 'rank'])
+        conn.execute("INSERT INTO specials SELECT * FROM specials_df")
 
     t1 = time.time()
-    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
+    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_db}")
 
     # --- Build token_bytes lookup for BPB evaluation ---
     print("Tokenizer: building token_bytes lookup...")
@@ -215,8 +230,23 @@ class Tokenizer:
 
     @classmethod
     def from_directory(cls, tokenizer_dir=TOKENIZER_DIR):
-        with open(os.path.join(tokenizer_dir, "tokenizer.pkl"), "rb") as f:
-            enc = pickle.load(f)
+        tokenizer_db = os.path.join(tokenizer_dir, "tokenizer.duckdb")
+        with duckdb.connect(tokenizer_db, read_only=True) as conn:
+            meta = conn.execute("SELECT name, pat_str FROM metadata").fetchone()
+            name, pat_str = meta
+            
+            merges_df = conn.execute("SELECT token, rank FROM merges").df()
+            mergeable_ranks = {bytes(r['token']): int(r['rank']) for _, r in merges_df.iterrows()}
+            
+            specials_df = conn.execute("SELECT token, rank FROM specials").df()
+            special_tokens = {str(r['token']): int(r['rank']) for _, r in specials_df.iterrows()}
+            
+            enc = tiktoken.Encoding(
+                name=name,
+                pat_str=pat_str,
+                mergeable_ranks=mergeable_ranks,
+                special_tokens=special_tokens
+            )
         return cls(enc)
 
     def get_vocab_size(self):

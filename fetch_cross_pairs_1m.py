@@ -20,21 +20,19 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from config import Config
+from candle_cache import CandleCache
 from coinbase.rest import RESTClient
 
-DB_PATH = Path(__file__).parent / "candles.duckdb"
+DB_PATH = Config.DB_PATH
 MAX_CANDLES = 350
 
 class CrossPairIngestor:
     def __init__(self, api_key=None, api_secret=None):
-        api_key = api_key or os.getenv("COINBASE_API_KEY")
-        api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
-        
-        if api_key and api_key != "your_api_key_here":
-            self.client = RESTClient(api_key, api_secret)
-        else:
-            self.client = RESTClient()
-            
+        self.api_key = api_key or Config.COINBASE_API_KEY
+        self.api_secret = api_secret or Config.COINBASE_API_SECRET
+        self.client = RESTClient(self.api_key, self.api_secret)
+        self.cache = CandleCache(str(DB_PATH))
         self.db = duckdb.connect(str(DB_PATH))
     
     def get_cross_products(self):
@@ -117,13 +115,7 @@ class CrossPairIngestor:
         if not candles:
             return 0
         df = pd.DataFrame(candles)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        self.db.execute("""
-            INSERT OR REPLACE INTO candles 
-            (product_id, timestamp, open, high, low, close, volume, granularity)
-            SELECT product_id, timestamp, open, high, low, close, volume, granularity 
-            FROM df
-        """)
+        self.cache.save_candles(df)
         return len(candles)
 
     def ingest_product(self, product_id, days=365, granularity="300"):
