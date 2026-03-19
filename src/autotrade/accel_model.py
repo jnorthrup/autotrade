@@ -264,7 +264,7 @@ class AccelModel:
         self.edge_dim = edge_dim
         self.node_dim = node_dim
         self.gat = GraphAttentionNetwork(
-            edge_feature_dim=self.x_pixels + 4,  # 20 fisheye + 4 metadata
+            edge_feature_dim=self.x_pixels + 4 + 16,  # 20 fisheye + 4 metadata + 16 peer features (4 nodes * 4 feats)
             edge_dim=edge_dim,
             node_dim=node_dim,
             n_message_passes=n_message_passes
@@ -314,18 +314,29 @@ class AccelModel:
 
     def _build_input_tensor(self, graph) -> torch.Tensor:
         """
-        Build per-edge feature matrix: (1, n_edges, x_pixels + 4)
+        Build per-edge feature matrix: (1, n_edges, x_pixels + 4 + 16)
         Each edge gets: fisheye_values (x_pixels) + [curvature, y_depth/1000, x_pixels/100, fee_rate]
+        PLUS features from 4 peer coins (selected by highest absolute HRM height).
         """
         edge_features = []
 
+        # Identify top 4 peer nodes by absolute height for global context
+        peer_nodes = []
+        if hasattr(graph, 'node_state'):
+            sorted_nodes = sorted(graph.node_state.items(), key=lambda x: abs(x[1].height), reverse=True)
+            peer_nodes = [n for n, ns in sorted_nodes[:4]]
+        
+        # Pad peer nodes if fewer than 4
+        while len(peer_nodes) < 4:
+            peer_nodes.append(None)
+
         for edge in self.edge_names:
+            base, quote = edge
             curvature = float(torch.clamp(self._edge_curvature[edge], 0.1, 10.0).detach())
             y_depth = int(torch.clamp(self._edge_y_depth[edge], 10, 1000).detach())
             x_pixels = int(torch.clamp(self._edge_x_pixels[edge], 5, 50).detach())
 
             boundaries = fisheye_boundaries(y_depth, x_pixels, curvature)
-
             closes = self._close_buffer.get(edge, [])
 
             if len(closes) < 2:
@@ -334,7 +345,6 @@ class AccelModel:
                 closes_array = np.array(closes[-y_depth:])
                 fisheye_values = fisheye_sample(closes_array, boundaries)
 
-            # Ensure we have exactly x_pixels values (pad or truncate)
             fisheye_values = fisheye_values[:self.x_pixels]
             while len(fisheye_values) < self.x_pixels:
                 fisheye_values.append(0.0)
@@ -345,9 +355,19 @@ class AccelModel:
                 x_pixels / 100.0,
                 graph.fee_rate if hasattr(graph, 'fee_rate') else 0.001
             ]
+
+            # Add peer features: [height, net_inflow, time_at_north/100, is_involved]
+            for peer in peer_nodes:
+                if peer and peer in graph.node_state:
+                    ns = graph.node_state[peer]
+                    is_involved = 1.0 if peer in [base, quote] else 0.0
+                    feat += [ns.height, ns.net_inflow, ns.time_at_north / 100.0, is_involved]
+                else:
+                    feat += [0.0, 0.0, 0.0, 0.0]
+
             edge_features.append(feat)
 
-        return torch.tensor(edge_features, dtype=torch.float32).unsqueeze(0)  # (1, n_edges, 24)
+        return torch.tensor(edge_features, dtype=torch.float32).unsqueeze(0)
 
     def _encode_direction(self, direction: str) -> int:
         mapping = {"north": 0, "neutral": 1, "south": 2}

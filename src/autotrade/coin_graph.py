@@ -8,8 +8,8 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from .config import Config
-from .candle_cache import CandleCache
+from config import Config
+from candle_cache import CandleCache
 
 
 @dataclass
@@ -378,8 +378,14 @@ class CoinGraph:
         es.n_traversals += 1
         es.last_pnl = pnl
         
-        # We no longer tweak conductance based on PnL heuristics.
-        # The model learns to catch the profitable 'spikes'.
+        if pnl > 0:
+            es.conductance *= 1.02
+            es.wins += 1
+        else:
+            es.conductance *= 0.95
+            es.losses += 1
+        
+        es.conductance = np.clip(es.conductance, 0.01, 10.0)
         
         es.volatility_window.append(abs(es.velocity))
         if len(es.volatility_window) > 20:
@@ -416,6 +422,69 @@ class CoinGraph:
             })
         return stats
 
+    def high_level_plan(self) -> Dict[str, str]:
+        potentials = self.node_potentials()
+        
+        if not potentials:
+            return {}
+        
+        median_height = np.median([p[0] for p in potentials]) if potentials else 0.0
+        std_height = np.std([p[0] for p in potentials]) if len(potentials) > 1 else 1.0
+        
+        direction = {}
+        for height, currency in potentials:
+            z_score = (height - median_height) / (std_height + 1e-8)
+            if z_score > 1.5:
+                direction[currency] = "north"
+            elif z_score < -1.5:
+                direction[currency] = "south"
+            else:
+                direction[currency] = "neutral"
+        
+        return direction
+
+    def low_level_execute(self, holding: str, predicted_accels: Dict[Tuple[str, str], float]) -> Optional[Tuple[str, str]]:
+        target = self.best_target()
+        
+        if target is None or holding == target:
+            return None
+        
+        paths = self.dijkstra(holding)
+        
+        if target not in paths or len(paths[target][1]) < 2:
+            return self._random_hop(holding)
+        
+        path = paths[target][1]
+        
+        next_edge = (path[0], path[1])
+        
+        if predicted_accels.get(next_edge, 0) > 0:
+            return next_edge
+        
+        return self._random_hop(holding)
+
+    def integrate_hrm_output(self, hrm_direction: Dict[str, str]):
+        if not hasattr(self, '_hrm_penalty'):
+            self._hrm_penalty = {}
+        
+        for edge, es in self.edge_state.items():
+            base, quote = edge
+            
+            base_dir = hrm_direction.get(base, "neutral")
+            quote_dir = hrm_direction.get(quote, "neutral")
+            
+            penalty = 0.0
+            if base_dir == "south" and quote_dir == "north":
+                penalty = 0.002
+            elif base_dir == "north" and quote_dir == "south":
+                penalty = -0.002
+            elif base_dir == "south" and quote_dir == "south":
+                penalty = 0.0005
+            elif base_dir == "north" and quote_dir == "north":
+                penalty = -0.0005
+            
+            self._hrm_penalty[edge] = penalty
+
     def edge_weight(self, base: str, quote: str) -> float:
         edge = (base, quote)
         if edge not in self.edge_state:
@@ -423,9 +492,10 @@ class CoinGraph:
         
         es = self.edge_state[edge]
         
-        # Pure physical cost + model-learned intensity
-        # w = cost - reward. No heuristic penalties.
-        w = self.fee_rate - es.accel
+        w = self.fee_rate - es.accel * es.conductance
+        
+        if hasattr(self, '_hrm_penalty') and edge in self._hrm_penalty:
+            w += self._hrm_penalty[edge]
         
         return max(0.0001, w)
 

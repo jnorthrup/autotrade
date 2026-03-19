@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Autoresearch autonomous experiment loop.
-Runs experiments with different hyperparameters, tracks val_bpb, and keeps improving.
+Physical Autoresearch Loop (MLX + ANE).
+Optimizes for 5-minute interval entropy.
 """
 
 import os
@@ -18,187 +18,121 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-RESULTS_FILE = "results.tsv"
+# Ensure results file is absolute and in the correct directory
+RESEARCH_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_FILE = os.path.join(RESEARCH_DIR, "results_physical.tsv")
 
 @dataclass
 class Result:
-    val_bpb: float
+    val_acc: float
     description: str
-    depth: int
-    aspect_ratio: int
-    matrix_lr: float
-    embedding_lr: float
-    window_pattern: str
+    curvature: float
+    power: float
+    h_cycles: int
+    l_cycles: int
     status: str = "ok"
 
 def read_results():
     results = []
-    if not os.path.exists(RESULTS_FILE):
-        return results
+    if not os.path.exists(RESULTS_FILE): return results
     with open(RESULTS_FILE, "r") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
             results.append(Result(
-                val_bpb=float(row["val_bpb"]),
+                val_acc=float(row["val_acc"]),
                 description=row["description"],
-                depth=int(row["depth"]),
-                aspect_ratio=int(row["aspect_ratio"]),
-                matrix_lr=float(row["matrix_lr"]),
-                embedding_lr=float(row["embedding_lr"]),
-                window_pattern=row["window_pattern"],
+                curvature=float(row["curvature"]),
+                power=float(row["power"]),
+                h_cycles=int(row["h_cycles"]),
+                l_cycles=int(row["l_cycles"]),
                 status=row.get("status", "ok")
             ))
     return results
 
-def write_result(r: Result):
-    file_exists = os.path.exists(RESULTS_FILE)
-    with open(RESULTS_FILE, "a") as f:
-        writer = csv.DictWriter(f, delimiter="\t", fieldnames=[
-            "val_bpb", "description", "depth", "aspect_ratio", "matrix_lr", "embedding_lr", "window_pattern", "status"
-        ])
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({
-            "val_bpb": r.val_bpb,
-            "description": r.description,
-            "depth": r.depth,
-            "aspect_ratio": r.aspect_ratio,
-            "matrix_lr": r.matrix_lr,
-            "embedding_lr": r.embedding_lr,
-            "window_pattern": r.window_pattern,
-            "status": r.status
-        })
-
-def get_best_result():
-    results = [r for r in read_results() if r.status == "ok"]
-    if not results:
-        return None
-    return min(results, key=lambda x: x.val_bpb)
-
-def run_experiment(depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, description):
-    print(f"\n--- Experiment: {description} ---")
-    print(f"Params: depth={depth} ar={aspect_ratio} mlr={matrix_lr:.4f} elr={embedding_lr:.4f} win={window_pattern}")
+def run_experiment(curvature, power, h_cycles, l_cycles, description):
+    print(f"\n--- Physical Experiment (5m): {description} ---")
     
-    # Update train.py
-    with open("train.py", "r") as f:
-        lines = f.readlines()
-    
-    new_lines = []
-    for line in lines:
-        if line.startswith("DEPTH = "):
-            new_lines.append(f"DEPTH = {depth}\n")
-        elif line.startswith("ASPECT_RATIO = "):
-            new_lines.append(f"ASPECT_RATIO = {aspect_ratio}\n")
-        elif line.startswith("MATRIX_LR = "):
-            new_lines.append(f"MATRIX_LR = {matrix_lr}\n")
-        elif line.startswith("EMBEDDING_LR = "):
-            new_lines.append(f"EMBEDDING_LR = {embedding_lr}\n")
-        elif line.startswith("WINDOW_PATTERN = "):
-            new_lines.append(f"WINDOW_PATTERN = \"{window_pattern}\"\n")
-        else:
-            new_lines.append(line)
+    train_file = os.path.join(os.path.dirname(__file__), "train.py")
+    with open(train_file, "r") as f: lines = f.readlines()
+    with open(train_file, "w") as f:
+        for line in lines:
+            if line.startswith("CURVATURE = "): f.write(f"CURVATURE = {curvature}\n")
+            elif line.startswith("HYPERBOLIC_POWER = "): f.write(f"HYPERBOLIC_POWER = {power}\n")
+            elif line.startswith("H_CYCLES = "): f.write(f"H_CYCLES = {h_cycles}\n")
+            elif line.startswith("L_CYCLES = "): f.write(f"L_CYCLES = {l_cycles}\n")
+            else: f.write(line)
             
-    with open("train.py", "w") as f:
-        f.writelines(new_lines)
-        
-    # Run training
-    cmd = ["uv", "run", "train.py"]
+    # Run from project root as a module to fix relative imports
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+    print(f"Executing experiment in root: {root_dir}")
+    cmd = ["uv", "run", "-m", "src.autotrade.research.train"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Parse output for val_bpb
-        val_bpb = None
+        # Increase timeout or check for immediate failure
+        print("Starting training...")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=root_dir)
+        print("Training finished successfully.")
+        val_acc = None
         for line in result.stdout.splitlines():
-            if line.startswith("val_bpb:"):
-                val_bpb = float(line.split(":")[1].strip())
+            if "Final val_acc:" in line:
+                val_acc = float(line.split(":")[1].strip())
                 break
-        
-        if val_bpb is None:
-            print("Failed to find val_bpb in output")
+        if val_acc is None: 
+            print("Failed to parse val_acc. stdout:")
+            print(result.stdout)
             return None
-            
-        res = Result(val_bpb, description, depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern)
-        write_result(res)
-        return res
-    except subprocess.CalledProcessError as e:
-        print(f"Experiment failed with exit code {e.returncode}")
-        print(e.stderr)
-        res = Result(999.0, description, depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, status="fail")
-        write_result(res)
+        
+        # Log to file manually
+        with open(RESULTS_FILE, "a") as f:
+            if os.path.getsize(RESULTS_FILE) == 0:
+                f.write("val_acc\tdescription\tcurvature\tpower\th_cycles\tl_cycles\tstatus\n")
+            f.write(f"{val_acc}\t{description}\t{curvature}\t{power}\t{h_cycles}\t{l_cycles}\tok\n")
+        return Result(val_acc, description, curvature, power, h_cycles, l_cycles)
+    except Exception as e:
+        print(f"Experiment failed: {e}")
+        if hasattr(e, 'stdout') and e.stdout: print(e.stdout)
+        if hasattr(e, 'stderr') and e.stderr: print(e.stderr)
         return None
-
-class ParamPredictor(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(5, 32),
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
-    def forward(self, x):
-        return self.net(x)
-
-def window_to_idx(p):
-    patterns = ["SSSS", "SSSL", "SSLL", "LLLL"]
-    return patterns.index(p) if p in patterns else 0
 
 def suggest_next_experiment(results: list[Result], iteration: int):
     if len(results) < 5:
-        depth = random.randint(4, 16)
-        aspect_ratio = random.choice([32, 48, 64, 80, 96])
-        matrix_lr = random.uniform(0.01, 0.1)
-        embedding_lr = random.uniform(0.1, 1.0)
-        window_pattern = random.choice(["SSSS", "SSSL", "SSLL", "LLLL"])
-        description = f"exploration {iteration}"
-        return depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, description
+        # Initial Exploration
+        return random.uniform(0.5, 4.0), random.uniform(1.0, 3.0), random.randint(1, 4), random.randint(1, 6), f"exploration {iteration}"
 
-    X, y = [], []
-    for r in results:
-        if r.status == "ok":
-            X.append([r.depth, r.aspect_ratio, r.matrix_lr, r.embedding_lr, window_to_idx(r.window_pattern)])
-            y.append([r.val_bpb])
+    # Meta-Optimizer
+    X = torch.tensor([[r.curvature, r.power, r.h_cycles, r.l_cycles] for r in results if r.status == "ok"], dtype=torch.float32)
+    y = torch.tensor([[r.val_acc] for r in results if r.status == "ok"], dtype=torch.float32)
+    X_m, X_s = X.mean(0), X.std(0) + 1e-6
+    y_m, y_s = y.mean(), y.std() + 1e-6
     
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    X_mean, X_std = X.mean(0), X.std(0) + 1e-6
-    y_mean, y_std = y.mean(), y.std() + 1e-6
-    
-    model = ParamPredictor()
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    model = nn.Sequential(nn.Linear(4, 32), nn.ReLU(), nn.Linear(32, 1))
+    opt = optim.Adam(model.parameters(), lr=0.01)
     for _ in range(500):
-        optimizer.zero_grad()
-        loss = nn.MSELoss()(model((X - X_mean) / X_std), (y - y_mean) / y_std)
-        loss.backward()
-        optimizer.step()
+        opt.zero_grad(); nn.MSELoss()(model((X-X_m)/X_s), (y-y_m)/y_s).backward(); opt.step()
     
-    best_candidate = None
-    best_pred_val = float('inf')
-    for _ in range(100):
-        c = [random.randint(4, 16), random.choice([32, 48, 64, 80, 96]), random.uniform(0.01, 0.1), random.uniform(0.1, 1.0), random.randint(0, 3)]
+    best_c, best_v = None, -float('inf')
+    for _ in range(200):
+        c = [random.uniform(0.5, 4.0), random.uniform(1.0, 3.5), random.randint(1, 4), random.randint(1, 6)]
         with torch.no_grad():
-            pred = model((torch.tensor([c], dtype=torch.float32) - X_mean) / X_std).item() * y_std.item() + y_mean.item()
-        if pred < best_pred_val:
-            best_pred_val, best_candidate = pred, c
+            v = model((torch.tensor([c], dtype=torch.float32)-X_m)/X_s).item() * y_s.item() + y_m.item()
+        if v > best_v: best_v, best_c = v, c
             
-    depth, aspect_ratio, matrix_lr, embedding_lr, win_idx = best_candidate
-    window_pattern = ["SSSS", "SSSL", "SSLL", "LLLL"][win_idx]
-    description = f"model-suggested (pred_bpb={best_pred_val:.4f})"
-    return depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, description
+    curv, pwr, h, l = best_c
+    return curv, pwr, h, l, f"model-suggested (pred_acc={best_v:.4f})"
 
 def main():
-    print("Autoresearch Experiment Loop")
-    print("=" * 40)
-    
+    print("Physical 5m HRM-ANE Experiment Loop")
     iteration = 0
-    max_iterations = 50
-    while iteration < max_iterations:
+    while iteration < 50:
         iteration += 1
         results = read_results()
-        depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, description = suggest_next_experiment(results, iteration)
-        run_experiment(depth, aspect_ratio, matrix_lr, embedding_lr, window_pattern, description)
-        best = get_best_result()
-        print(f"\nIteration {iteration}/{max_iterations}. Best: val_bpb={best.val_bpb:.4f if best else 999}")
+        curv, pwr, h, l, desc = suggest_next_experiment(results, iteration)
+        run_experiment(curv, pwr, h, l, desc)
+        
+        # Re-read results to get latest best
+        updated_results = read_results()
+        best = max(updated_results, key=lambda x: x.val_acc) if updated_results else None
+        best_acc = best.val_acc if best else 0.0
+        print(f"\nIteration {iteration}. Best Val Acc: {best_acc:.4f}")
 
 if __name__ == "__main__":
     main()

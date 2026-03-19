@@ -72,7 +72,7 @@ class WSCandles:
                     b["volume"] += volume
 
     def _flush_bar(self, pid: str):
-        """Inject closed bars for ALL pairs into graph to keep them aligned."""
+        """Inject closed bars for ALL pairs into graph and persist to DuckDB."""
         b = self._bars[pid]
         bs_float = b["start"]
         ts = pd.Timestamp(datetime.fromtimestamp(bs_float, tz=timezone.utc).replace(tzinfo=None))
@@ -92,9 +92,23 @@ class WSCandles:
                     df = self.graph.edges[edge]
                     if ts not in df.index:
                         self.graph.edges[edge] = pd.concat([df, row])
+            
+            # Persist to DuckDB/Parquet surface if available
+            if hasattr(self.graph, 'cache'):
+                try:
+                    save_df = pd.DataFrame([{
+                        'product_id': pid,
+                        'timestamp': ts,
+                        'open': b["open"], 'high': b["high"],
+                        'low': b["low"],  'close': b["close"],
+                        'volume': b["volume"], 'granularity': "300",
+                    }])
+                    self.graph.cache.save_candles(save_df)
+                except Exception as e:
+                    print(f"[WS] Persist error: {e}")
+
 
         # Forward-fill any other pairs that didn't get a tick this bar
-        # This prevents the graph from having 'missing' nodes at the new timestamp
         for other_pid in self._product_ids:
             if other_pid == pid:
                 continue
@@ -110,7 +124,6 @@ class WSCandles:
             
             df = self.graph.edges[edge]
             if ts not in df.index:
-                # Use last known close as the OHLC for this empty bar
                 last_val = df['close'].iloc[-1] if len(df) > 0 else 0.0
                 fill_row = pd.DataFrame([{
                     "open": last_val, "high": last_val,
@@ -191,8 +204,15 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
     bar_idx = start_bar
     pending_trade: Optional[Tuple[str, str]] = None  # decided at bar t, collected at bar t+1
     predicted_accels: Dict = {}
+    
+    start_time = time.time()
+    MAX_LIVE_SECONDS = 300  # 5 minutes
 
     while end_bar is None or bar_idx < end_bar:
+        if ws and (time.time() - start_time > MAX_LIVE_SECONDS):
+            print(f"Live mode runtime limit reached ({MAX_LIVE_SECONDS}s). Stopping.")
+            break
+
         if bar_idx >= len(graph.common_timestamps):
             if ws:
                 # Live mode: wait for WSCandles to inject a new bar
@@ -457,7 +477,7 @@ def main():
                         choices=['single_asset', 'fractional', 'multi_asset'],
                         help='Portfolio manager mode: single_asset (one trade), fractional (Kelly), multi_asset (rank all flows)')
     parser.add_argument('--initial-capital', type=float, default=100.0)
-    parser.add_argument('--live', action='store_true', help='Live mode: WS feeds bars after history exhausted')
+    parser.add_argument('--live', action='store_true', default=True, help='Live mode: WS feeds bars after history exhausted (default: True)')
     parser.add_argument('--refresh-bag', action='store_true', help='Re-discover pairs and update bag.json')
     parser.add_argument('--min-partners', type=int, default=5, help='Minimum connections to include a coin')
     parser.add_argument('--max-partners', type=int, default=None, help='Maximum connections to include a coin')
