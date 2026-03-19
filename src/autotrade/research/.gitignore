@@ -1,0 +1,15 @@
+# Environments
+.venv/
+node_modules/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Research Artifacts
+results.tsv
+*.pt
+*.bin
+checkpoint/
