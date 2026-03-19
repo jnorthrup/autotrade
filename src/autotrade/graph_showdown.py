@@ -195,7 +195,6 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
     while end_bar is None or bar_idx < end_bar:
         if bar_idx >= len(graph.common_timestamps):
             if ws:
-                # Live mode: wait for WSCandles to inject a new bar
                 with ws._lock:
                     added = ws._new_bars
                     ws._new_bars = 0
@@ -205,7 +204,6 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
             else:
                 added = graph.hydrate_increment(days=7)
                 if added == 0:
-                    print(f"Reached end of available history at bar {bar_idx}.")
                     break
 
         # 1. REVEAL bar t actual data
@@ -216,51 +214,71 @@ def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0
             base, quote = pending_trade
             es = graph.edge_state.get((base, quote))
             if es:
-                rate = es.velocity - graph.fee_rate  # always collect — positive or negative
+                rate = es.velocity - graph.fee_rate
                 capital *= (1 + rate)
                 n_trades += 1
                 graph.reinforce(base, quote, rate)
                 pm.record_pnl((base, quote), rate)
-
-                if quote not in quote_tracking:
-                    quote_tracking[quote] = {'n_trades': 0, 'pnl': 0.0}
+                quote_tracking.setdefault(quote, {'n_trades': 0, 'pnl': 0.0})
                 quote_tracking[quote]['n_trades'] += 1
                 quote_tracking[quote]['pnl'] += rate
-                holding = quote  # always move — no retroactive undo
+                holding = quote
 
-        # 3. TRAIN on bar t (no future leakage — bar t is now fully known)
-        loss = accel_model.update(graph, edge_accels, bar_idx)
-        if loss is not None:
-            total_loss += loss
-            n_updates += 1
+        # 3. TRAIN on bar t completed horizons (no future leakage)
+        if bar_idx > 20:
+            actual_horizons = {}
+            for edge in graph.edge_names:
+                df = graph.edges.get(edge)
+                if df is None: continue
+                h_rets = []
+                for h in [1, 3, 5, 10, 20]:
+                    # sum of log returns for window ending at bar_idx
+                    window = df.iloc[max(0, bar_idx-h):bar_idx]
+                    if not window.empty:
+                        ret = np.log(window['close'].iloc[-1] / window['open'].iloc[0])
+                        if graph.edge_state[edge].base != edge[0]: ret *= -1
+                        h_rets.append(ret)
+                    else: h_rets.append(0.0)
+                actual_horizons[edge] = np.array(h_rets)
+            
+            loss = accel_model.update(graph, actual_horizons, bar_idx)
+            if loss is not None:
+                total_loss += loss
+                n_updates += 1
 
-        # 4. PREDICT bar t+1 using model trained through bar t
-        if bar_idx % 10 == 0:
-            hrm_direction = accel_model.high_level_plan(graph)
-            graph.integrate_hrm_output(hrm_direction)
-
+        # 4. PREDICT bar t+1 using pure weight-driven HRM
         if bar_idx >= 8:
-            predicted_accels = accel_model.predict(graph)
-            for edge, pred in predicted_accels.items():
+            # Multi-horizon prediction: [1, 3, 5, 10, 20]
+            predicted_horizons = accel_model.predict(graph)
+            
+            # Inject agreement signal into graph potentials
+            for edge, h_preds in predicted_horizons.items():
                 if edge in graph.edge_state:
-                    graph.edge_state[edge].accel = pred
-            graph._compute_heights(predicted_accels)
+                    # Signal = intensity mean across horizons
+                    graph.edge_state[edge].accel = np.mean(h_preds)
+            
+            # Recompute Dijkstra potentials based on model gravity
+            graph._compute_heights({e: np.mean(h) for e, h in predicted_horizons.items()})
 
-        # 5. DECIDE trade for bar t+1 based solely on predictions
+        # 5. DECIDE for bar t+1
         target = graph.best_target()
-        candidate = graph.next_hop(holding, target)
-        if candidate is not None and predicted_accels.get(candidate, 0) > 0:
-            pending_trade = candidate
-        else:
-            pending_trade = None  # no positive signal — hold
-
-        if pending_trade is not None:
+        candidate = None
+        if target and holding != target:
             paths = graph.dijkstra(holding)
-            if target and target in paths and len(paths[target][1]) > 2:
-                full_path = "->".join(paths[target][1])
-                if full_path not in path_tracking:
-                    path_tracking[full_path] = {'n_uses': 0, 'pnl': 0.0}
-                path_tracking[full_path]['n_uses'] += 1
+            if target in paths and len(paths[target][1]) >= 2:
+                path = paths[target][1]
+                candidate = (path[0], path[1])
+
+        # Portfolio Manager handles 'Narrowing Threshold' consistency logic
+        # If signal across horizons isn't intense and agreed, decision is None
+        decision = pm.decide(graph, holding, candidate, predicted_horizons if bar_idx >= 8 else {})
+        if decision:
+            pending_trade = (decision.base, decision.quote)
+            path_str = f"{decision.base}->{decision.quote}"
+            path_tracking.setdefault(path_str, {'n_uses': 0, 'pnl': 0.0})
+            path_tracking[path_str]['n_uses'] += 1
+        else:
+            pending_trade = None
 
         if capital < initial_capital * 0.05:
             print(f"Ruin floor hit at bar {bar_idx}: capital=${capital:.2f}. Stopping.")
