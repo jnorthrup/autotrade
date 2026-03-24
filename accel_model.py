@@ -138,7 +138,14 @@ class AccelModel:
         for base, quote in edges:
             node_set.add(base)
             node_set.add(quote)
-        self.node_names = sorted(list(node_set))
+        
+        # USD is countercoin-0 (ground truth for PnL)
+        if "USD" in node_set:
+            node_set.discard("USD")
+            self.node_names = ["USD"] + sorted(node_set)
+        else:
+            self.node_names = sorted(node_set)
+        
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
         n_nodes = len(self.node_names)
 

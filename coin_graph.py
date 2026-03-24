@@ -128,6 +128,11 @@ class CoinGraph:
             df = df.set_index('timestamp')
             self.nodes.add(base)
             self.nodes.add(quote)
+        
+        # Ensure USD is countercoin-0 (ground truth for PnL scoring)
+        if "USD" in self.nodes:
+            self.nodes.discard("USD")
+            self.nodes = {"USD"} | self.nodes
             self.edges[(base, quote)] = df
             self.edges[(quote, base)] = df
             self.edge_state[(base, quote)] = EdgeState()
