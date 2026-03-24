@@ -1,6 +1,6 @@
 import numpy as np
-from collections import deque
-from dataclasses import dataclass, field
+from collections import deque, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -46,9 +46,10 @@ def fisheye_sample(candles: np.ndarray, boundaries: List[int]) -> List[float]:
 @dataclass
 class PredictionFrame:
     edge: Tuple[str, str]
-    predicted_velocity: float
+    predicted_fraction: float
+    predicted_ptt: float
+    predicted_stop: float
     fisheye: List[float]
-    node_heights: np.ndarray
     bar_idx: int
 
 
@@ -60,7 +61,13 @@ class HRMState:
 
 
 class EdgeModel(nn.Module):
-    """Per-edge velocity prediction from fisheye (candle compression)."""
+    """Per-edge prediction from fisheye.
+    
+    Outputs per edge:
+    - fraction: position size [0,1] (sigmoid)
+    - PTT: profit target probability [0,1] (sigmoid)
+    - STOP: stop loss probability [0,1] (sigmoid)
+    """
     def __init__(self, x_pixels: int, h_dim: int = 16, z_dim: int = 8):
         super().__init__()
         self.encoder = nn.Sequential(
@@ -68,17 +75,27 @@ class EdgeModel(nn.Module):
             nn.ReLU(),
             nn.Linear(h_dim, z_dim),
         )
-        self.decoder = nn.Linear(z_dim, 1)
-        nn.init.zeros_(self.decoder.weight)
-        nn.init.zeros_(self.decoder.bias)
+        self.fraction_head = nn.Linear(z_dim, 1)
+        self.ptt_head = nn.Linear(z_dim, 1)
+        self.stop_head = nn.Linear(z_dim, 1)
+        
+        nn.init.zeros_(self.fraction_head.weight)
+        nn.init.zeros_(self.fraction_head.bias)
+        nn.init.zeros_(self.ptt_head.weight)
+        nn.init.zeros_(self.ptt_head.bias)
+        nn.init.zeros_(self.stop_head.weight)
+        nn.init.zeros_(self.stop_head.bias)
     
-    def forward(self, fisheye: torch.Tensor) -> torch.Tensor:
+    def forward(self, fisheye: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         z = self.encoder(fisheye)
-        return self.decoder(z).squeeze(-1)
+        fraction = torch.sigmoid(self.fraction_head(z)).squeeze(-1)
+        ptt = torch.sigmoid(self.ptt_head(z)).squeeze(-1)
+        stop = torch.sigmoid(self.stop_head(z)).squeeze(-1)
+        return fraction, ptt, stop
 
 
 class AccelModel:
-    def __init__(self, n_edges: int = 0, sequence_length: int = 8, learning_rate: float = 0.001,
+    def __init__(self, n_edges: int = 0, learning_rate: float = 0.001,
                  y_depth: int = 200, x_pixels: int = 20, curvature: float = 2.0,
                  h_dim: int = 16, z_dim: int = 8, prediction_depth: int = 1, **kwargs):
         self.y_depth = y_depth
@@ -93,14 +110,12 @@ class AccelModel:
         self.node_names: List[str] = []
         self.node_to_idx: Dict[str, int] = {}
 
-        self._model: Optional[HRM_VAE] = None
+        self._model: Optional[EdgeModel] = None
         self._optimizer: Optional[optim.Optimizer] = None
 
         self.hrm_state: Dict[str, HRMState] = {}
         self._close_buffer: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self._max_history = max(y_depth + 100, 500)
-        
-        self._kl_weight = 0.01
         
         self._prediction_queue: Dict[Tuple[str, str], deque] = {}
 
@@ -112,7 +127,6 @@ class AccelModel:
             node_set.add(base)
             node_set.add(quote)
         
-        # USD is countercoin-0 (ground truth for PnL)
         if "USD" in node_set:
             node_set.discard("USD")
             self.node_names = ["USD"] + sorted(node_set)
@@ -120,9 +134,8 @@ class AccelModel:
             self.node_names = sorted(node_set)
         
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
-        n_nodes = len(self.node_names)
 
-        self._model = HRM_VAE(n_nodes, self.x_pixels, self.h_dim, self.z_dim)
+        self._model = EdgeModel(self.x_pixels, self.h_dim, self.z_dim)
         self._optimizer = optim.Adam(self._model.parameters(), lr=self._lr)
         
         for edge in edges:
@@ -140,9 +153,6 @@ class AccelModel:
             values.append(0.0)
         return values
 
-    def _get_edge_input(self, graph, edge: Tuple[str, str]) -> np.ndarray:
-        return np.array(self._get_fisheye(edge), dtype=np.float32)
-
     def update_prices(self, graph, bar_idx: int):
         if bar_idx < 0:
             return
@@ -156,57 +166,52 @@ class AccelModel:
                     if len(buf) > self._max_history:
                         self._close_buffer[edge] = buf[-self._max_history:]
 
-    def predict(self, graph, bar_idx: int = -1) -> Dict[Tuple[str, str], float]:
+    def predict(self, graph, bar_idx: int = -1) -> Dict[Tuple[str, str], Tuple[float, float, float]]:
+        """Predict fraction, PTT, STOP for each edge.
+        
+        Returns: {edge: (fraction, ptt_prob, stop_prob)}
+        """
         if not self.edge_names or self._model is None:
             return {}
-        
-        node_heights_arr = self._get_node_heights(graph)
-        node_heights = torch.from_numpy(node_heights_arr).unsqueeze(0)
         
         predictions = {}
         with torch.no_grad():
             for edge in self.edge_names:
                 fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32).unsqueeze(0)
-                vel, _, _ = self._model(node_heights, fisheye)
-                predicted_velocity = float(vel)
-                predictions[edge] = predicted_velocity
+                fraction, ptt, stop = self._model(fisheye)
+                f, p, s = float(fraction), float(ptt), float(stop)
+                predictions[edge] = (f, p, s)
                 
                 self._prediction_queue[edge].append(PredictionFrame(
                     edge=edge,
-                    predicted_velocity=predicted_velocity,
+                    predicted_fraction=f,
+                    predicted_ptt=p,
+                    predicted_stop=s,
                     fisheye=self._get_fisheye(edge),
-                    node_heights=node_heights_arr.copy(),
                     bar_idx=bar_idx
                 ))
         
         return predictions
 
-    def _hyperbolic_loss(self, pred: torch.Tensor, actual: float) -> torch.Tensor:
-        pred_val = float(pred.detach())
-        pred_sign = 1.0 if pred_val > 0 else -1.0 if pred_val < 0 else 0.0
-        actual_sign = 1.0 if actual > 0 else -1.0 if actual < 0 else 0.0
-        
-        raw_mse = (pred - actual) ** 2
-        
-        if pred_sign != 0 and actual_sign != 0:
-            if pred_sign == actual_sign:
-                return raw_mse * 0.5
-            else:
-                return raw_mse * 4.0
-        return raw_mse
-
     def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1,
-               actual_velocities: Optional[Dict[Tuple[str, str], float]] = None) -> Optional[float]:
+               actual_velocities: Optional[Dict[Tuple[str, str], float]] = None,
+               hit_ptt: Optional[Dict[Tuple[str, str], bool]] = None,
+               hit_stop: Optional[Dict[Tuple[str, str], bool]] = None) -> Optional[float]:
+        """Train on fraction, PTT, STOP predictions.
+        
+        hit_ptt/stop: {edge: bool} - did edge cross band?
+        """
         if not self.edge_names or self._model is None or self._optimizer is None:
             return None
 
         self.update_prices(graph, bar_idx)
-        targets = actual_velocities if actual_velocities else actual_accels
+        
+        if hit_ptt is None or hit_stop is None:
+            return None
 
         self._optimizer.zero_grad()
         
-        total_pred_loss = torch.tensor(0.0)
-        total_kl_loss = torch.tensor(0.0)
+        total_loss = torch.tensor(0.0)
         n_scored = 0
         
         for edge in self.edge_names:
@@ -215,29 +220,31 @@ class AccelModel:
                 continue
             
             frame = queue[0]
-            actual = targets.get(edge, 0.0)
             
-            node_heights = torch.from_numpy(frame.node_heights).unsqueeze(0)
+            # PTT/STOP targets
+            ptt_target = 1.0 if hit_ptt.get(edge, False) else 0.0
+            stop_target = 1.0 if hit_stop.get(edge, False) else 0.0
+            
+            # Fraction target: 1.0 = trade (PTT hit), 0.0 = avoid (STOP hit), 0.5 = neutral
+            if hit_ptt.get(edge, False):
+                frac_target = 1.0
+            elif hit_stop.get(edge, False):
+                frac_target = 0.0
+            else:
+                frac_target = 0.5
+            
             fisheye = torch.tensor(frame.fisheye, dtype=torch.float32).unsqueeze(0)
+            pred_frac, pred_ptt, pred_stop = self._model(fisheye)
             
-            pred, mu, logvar = self._model(node_heights, fisheye)
+            frac_loss = nn.functional.binary_cross_entropy(pred_frac, torch.tensor([frac_target]))
+            ptt_loss = nn.functional.binary_cross_entropy(pred_ptt, torch.tensor([ptt_target]))
+            stop_loss = nn.functional.binary_cross_entropy(pred_stop, torch.tensor([stop_target]))
             
-            pred_loss = self._hyperbolic_loss(pred, actual)
-            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-            
-            total_pred_loss = total_pred_loss + pred_loss
-            total_kl_loss = total_kl_loss + kl_loss
+            total_loss = total_loss + frac_loss + ptt_loss + stop_loss
             n_scored += 1
-            
-            base, _ = edge
-            if base in self.hrm_state:
-                hs = self.hrm_state[base]
-                hs.low_level_accuracy = hs.low_level_accuracy * 0.99 + (
-                    1.0 if (float(pred.detach()) > 0) == (actual > 0) else 0.0
-                ) * 0.01
 
         if n_scored > 0:
-            loss = total_pred_loss / n_scored + self._kl_weight * total_kl_loss / n_scored
+            loss = total_loss / n_scored
             loss.backward()
             self._optimizer.step()
             return float(loss)

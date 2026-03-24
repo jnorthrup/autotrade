@@ -13,6 +13,10 @@ from candle_cache import CandleCache
 @dataclass
 class EdgeState:
     velocity: float = 0.0
+    ptt: float = 0.0      # upper band = profit target
+    stop: float = 0.0     # lower band = stop loss
+    hit_ptt: bool = False
+    hit_stop: bool = False
 
 
 @dataclass  
@@ -29,6 +33,8 @@ class CoinGraph:
         self.edge_state: Dict[Tuple[str, str], EdgeState] = {}
         self.node_state: Dict[str, NodeState] = {}
         self.common_timestamps: List[pd.Timestamp] = []
+        self._volatility: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self._vol_window = 20
 
     def load(self, db_path: Optional[str] = None, granularity: str = None,
              min_partners: int = 5, max_partners: Optional[int] = None,
@@ -153,14 +159,20 @@ class CoinGraph:
         self.common_timestamps = sorted(list(common))
         print(f"Aligned {len(self.common_timestamps)} bars across {len(self.nodes)} nodes")
 
-    def update(self, bar_idx: int) -> Tuple[Dict[Tuple[str, str], float], Dict[Tuple[str, str], float]]:
-        """Compute velocity (log return) for each edge at bar_idx."""
+    def update(self, bar_idx: int) -> Tuple[Dict[Tuple[str, str], float], Dict[Tuple[str, str], float], 
+                                            Dict[Tuple[str, str], bool], Dict[Tuple[str, str], bool]]:
+        """Compute velocity and PTT/STOP band crossings.
+        
+        Returns: (edge_accels, edge_velocities, hit_ptt, hit_stop)
+        """
         if bar_idx >= len(self.common_timestamps):
-            return {}, {}
+            return {}, {}, {}, {}
 
         ts = self.common_timestamps[bar_idx]
         edge_accels = {}
         edge_velocities = {}
+        hit_ptt = {}
+        hit_stop = {}
 
         for (base, quote), df in self.edges.items():
             if ts not in df.index:
@@ -180,9 +192,25 @@ class CoinGraph:
             self.edge_state[(base, quote)].velocity = velocity
             edge_accels[(base, quote)] = accel
             edge_velocities[(base, quote)] = velocity
+            
+            # Track volatility for band computation
+            self._volatility[(base, quote)].append(abs(velocity))
+            if len(self._volatility[(base, quote)]) > self._vol_window:
+                self._volatility[(base, quote)].pop(0)
+            
+            # Compute bands: fee + volatility noise floor
+            vol = np.mean(self._volatility[(base, quote)]) if self._volatility[(base, quote)] else 0.0
+            self.edge_state[(base, quote)].ptt = self.fee_rate + vol
+            self.edge_state[(base, quote)].stop = -(self.fee_rate + vol)
+            
+            # Check band crossings
+            hit_ptt[(base, quote)] = velocity > self.edge_state[(base, quote)].ptt
+            hit_stop[(base, quote)] = velocity < self.edge_state[(base, quote)].stop
+            self.edge_state[(base, quote)].hit_ptt = hit_ptt[(base, quote)]
+            self.edge_state[(base, quote)].hit_stop = hit_stop[(base, quote)]
 
         self._compute_heights(edge_accels)
-        return edge_accels, edge_velocities
+        return edge_accels, edge_velocities, hit_ptt, hit_stop
 
     def _compute_heights(self, edge_accels: Dict[Tuple[str, str], float]):
         """Node height = mean outgoing accel."""
