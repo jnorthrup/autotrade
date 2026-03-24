@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+os.environ['USE_WS_ONLY'] = 'false'  # Disable WS-only mode for historical data loading
 import argparse
 import json
 import math
@@ -10,9 +12,25 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Parse args early to allow patching before importing coin_graph
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument('--skip-fetch', action='store_true')
+_early_args, _ = _parser.parse_known_args()
+
+if _early_args.skip_fetch:
+    # Patch candle_cache before it's imported by coin_graph
+    import candle_cache
+    original_get_candles = candle_cache.CandleCache.get_candles
+    def patched_get_candles(self, product_id, start, end, granularity="300", skip_fetch=True):
+        return original_get_candles(self, product_id, start, end, granularity, skip_fetch=True)
+    candle_cache.CandleCache.get_candles = patched_get_candles
+    candle_cache.CandleCache.ws_snapshot = lambda self, *args, **kwargs: None
+    candle_cache.CandleCache.prefetch_all = lambda self, *args, **kwargs: None
+
 from coinbase.websocket import WSClient
 
-from accel_model import AccelModel
+from accel_model import AccelModel as PyTorchAccelModel
 from coin_graph import CoinGraph
 from portfolio_manager import PortfolioManager, Position
 
@@ -170,7 +188,7 @@ class WSCandles:
                 time.sleep(5)
 
 
-def run_simulation(graph: CoinGraph, accel_model: AccelModel, start_bar: int = 0,
+def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: int = 0,
                    end_bar: Optional[int] = None, print_every: int = 100,
                    pm_mode: str = 'single_asset', initial_capital: float = 10000.0,
                    ws: Optional[WSCandles] = None):
@@ -477,10 +495,13 @@ def main():
                         choices=['single_asset', 'fractional', 'multi_asset'],
                         help='Portfolio manager mode: single_asset (one trade), fractional (Kelly), multi_asset (rank all flows)')
     parser.add_argument('--initial-capital', type=float, default=100.0)
-    parser.add_argument('--live', action='store_true', default=True, help='Live mode: WS feeds bars after history exhausted (default: True)')
+    parser.add_argument('--live', action='store_true', help='Live mode: WS feeds bars after history exhausted')
+    parser.add_argument('--no-live', dest='live', action='store_false', help='Disable live mode, use historical data only')
     parser.add_argument('--refresh-bag', action='store_true', help='Re-discover pairs and update bag.json')
     parser.add_argument('--min-partners', type=int, default=5, help='Minimum connections to include a coin')
     parser.add_argument('--max-partners', type=int, default=None, help='Maximum connections to include a coin')
+    parser.add_argument('--ane', action='store_true', help='Use ANE-accelerated model (MLX) instead of PyTorch')
+    parser.add_argument('--skip-fetch', action='store_true', help='Skip network fetches, use cached data only')
     args = parser.parse_args()
     
     print("Loading coin graph...")
@@ -496,6 +517,13 @@ def main():
     if n_bars == 0:
         print("No data loaded. Run fetch_candles.py first.")
         return
+    
+    if args.ane:
+        from src.autotrade.ane_model import AccelModel
+        print("Using ANE-accelerated model (MLX)")
+    else:
+        AccelModel = PyTorchAccelModel
+        print("Using PyTorch model")
     
     accel_model = AccelModel(n_edges=len(graph.edges), sequence_length=8, y_depth=200, x_pixels=20, curvature=2.0)
     accel_model.register_edges(list(graph.edges.keys()))

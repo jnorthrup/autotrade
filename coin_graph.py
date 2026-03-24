@@ -120,10 +120,25 @@ class CoinGraph:
         end = datetime.now()
         start = end - timedelta(days=lookback_days)
 
-        if lookback_days <= 2:
+        if Config.USE_WS_ONLY:
+            # In pure websocket mode, we rely on snapshot and then fill missing candles from cache only.
+            print("[CoinGraph] USE_WS_ONLY enabled: using ws_snapshot and skipping REST prefetch")
+            try:
+                self.cache.ws_snapshot(pairs, granularity)
+            except Exception as e:
+                print(f"[CoinGraph] WS snapshot failed: {e}")
+        elif lookback_days <= 2:
             # Live mode: one WS connection, subscribe all pairs to candles, collect snapshots
             self.cache.ws_snapshot(pairs, granularity)
         else:
+            # Prefer WS snapshot first to avoid REST 429 and reduce RESTClient pressure.
+            try:
+                print("[CoinGraph] trying WS snapshot first for better scaling")
+                self.cache.ws_snapshot(pairs, granularity)
+            except Exception as e:
+                print(f"[CoinGraph] WS snapshot initial pass failed: {e}")
+
+            # Still run REST prefetch to fill any missing historical bars if needed
             self.cache.prefetch_all(pairs, start, end, granularity)
 
         for product_id in pairs:

@@ -16,6 +16,7 @@ class Config:
     
     # Defaults
     DEFAULT_GRANULARITY = os.getenv("DEFAULT_GRANULARITY", "300")
+    USE_WS_ONLY = os.getenv("USE_WS_ONLY", "true").lower() in ["1", "true", "yes"]
     
     @classmethod
     def validate(cls):

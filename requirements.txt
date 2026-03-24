@@ -1,5 +1,5 @@
 coinbase-advanced-py
-coinbase-websocket-sdk
+# coinbase-websocket-sdk is not published on PyPI; websocket support is included in coinbase-advanced-py
 pandas
 numpy
 torch
