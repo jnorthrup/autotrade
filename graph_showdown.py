@@ -206,6 +206,7 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
     
     bar_idx = start_bar
     pending_trade: Optional[Tuple[str, str]] = None  # decided at bar t, collected at bar t+1
+    pending_fraction: float = 0.0                    # position size [0,1] for pending_trade
     predicted_accels: Dict = {}
     
     start_time = time.time()
@@ -239,10 +240,22 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
             base, quote = pending_trade
             es = graph.edge_state.get((base, quote))
             if es:
-                rate = es.velocity - graph.fee_rate  # always collect — positive or negative
+                gross = es.velocity - graph.fee_rate
+                # Scale by the fraction committed at decision time
+                rate = pending_fraction * gross
                 capital *= (1 + rate)
                 n_trades += 1
-                graph.reinforce(base, quote, rate)
+
+                # Protection order outcomes
+                if gross <= es.stop_loss:
+                    # Stop-loss hit: reinforce with doubled penalty, skip to safety
+                    graph.reinforce(base, quote, rate * 2)
+                elif gross >= es.ptt:
+                    # PTT hit: profit taken, reinforce normally
+                    graph.reinforce(base, quote, rate)
+                else:
+                    graph.reinforce(base, quote, rate)
+
                 pm.record_pnl((base, quote), rate)
 
                 if quote not in quote_tracking:
@@ -271,18 +284,21 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
 
         # 5. DECIDE trade for bar t+1 based solely on predictions
         #
-        # Band of disinterest: each edge has a PTT (profit-take threshold)
-        # and stop-loss derived from its own volatility + fees.
-        # Predictions inside the band are noise — don't trade.
-        # Only trade when the prediction breaks above the edge's noise floor.
+        # Each frame produces: edge, fraction, PTT, stop-loss.
+        # Fraction = signal strength above the noise floor, normalized by band width.
+        # PTT and stop-loss are per-edge per-bar from rolling volatility + fees.
         target = graph.best_target()
         candidate = graph.next_hop(holding, target)
+        pending_trade = None
+        pending_fraction = 0.0
         if candidate is not None and predicted_accels:
             pred = predicted_accels.get(candidate, 0)
             es = graph.edge_state.get(candidate)
-            pending_trade = candidate if es and pred > es.ptt else None
-        else:
-            pending_trade = None
+            if es and pred > es.ptt:
+                band = es.ptt - es.stop_loss  # total band width
+                signal = pred - es.ptt        # excess above noise floor
+                pending_fraction = min(1.0, signal / band) if band > 0 else 1.0
+                pending_trade = candidate
 
         if pending_trade is not None:
             paths = graph.dijkstra(holding)
