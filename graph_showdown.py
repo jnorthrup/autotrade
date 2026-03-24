@@ -176,7 +176,8 @@ class WSCandles:
 def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: int = 0,
                    end_bar: Optional[int] = None, print_every: int = 100,
                    pm_mode: str = 'single_asset', initial_capital: float = 10000.0,
-                   ws: Optional[WSCandles] = None):
+                   ws: Optional[WSCandles] = None,
+                   early_stop_threshold: Optional[float] = None):
     if end_bar is None and ws is None:
         end_bar = len(graph.common_timestamps)
     
@@ -197,6 +198,7 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
 
     total_loss = 0.0
     n_updates = 0
+    early_stopped = False
 
     pm = PortfolioManager(
         mode=pm_mode,
@@ -311,6 +313,13 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
         if capital < initial_capital * 0.05:
             print(f"Ruin floor hit at bar {bar_idx}: capital=${capital:.2f}. Stopping.")
             break
+        
+        if early_stop_threshold is not None and bar_idx >= 500 and n_trades > 0:
+            running_bpb = -(capital / initial_capital - 1) / n_trades
+            if running_bpb > early_stop_threshold * 2:
+                print(f"Early stop at bar {bar_idx}: running_bpb={running_bpb:.6f} > {early_stop_threshold * 2:.6f}")
+                early_stopped = True
+                break
 
         if bar_idx % print_every == 0 and bar_idx > 0:
             avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
@@ -320,7 +329,7 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
 
         bar_idx += 1
     
-    return capital, n_trades, path_tracking, quote_tracking
+    return capital, n_trades, path_tracking, quote_tracking, early_stopped
 
 
 def _build_pair_adjacency(all_pairs: List[str]) -> Dict[str, List[str]]:
@@ -507,14 +516,18 @@ def run_autoresearch(graph: CoinGraph, max_minutes: int = 5, pm_mode: str = 'sin
             )
             accel_model.register_edges(list(trial_graph.edges.keys()))
 
-            pnl, n_trades, _, _ = run_simulation(
-                trial_graph, accel_model, print_every=1000, pm_mode=pm_mode
+            pnl, n_trades, _, _, early_stopped = run_simulation(
+                trial_graph, accel_model, print_every=1000, pm_mode=pm_mode,
+                early_stop_threshold=best_bpb if best_bpb < float('inf') else None
             )
 
             if n_trades > 0:
                 val_bpb = -pnl / n_trades
             else:
                 val_bpb = 999.0
+            
+            if early_stopped:
+                print(f"  [EARLY STOP] Trial killed at val_bpb={val_bpb:.6f}")
 
             if val_bpb < best_bpb:
                 best_bpb = val_bpb
