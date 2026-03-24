@@ -1,5 +1,5 @@
 import numpy as np
-from collections import defaultdict
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -44,73 +44,92 @@ def fisheye_sample(candles: np.ndarray, boundaries: List[int]) -> List[float]:
 
 
 @dataclass
+class PredictionFrame:
+    edge: Tuple[str, str]
+    predicted_velocity: float
+    fisheye: List[float]
+    node_heights: np.ndarray
+    bar_idx: int
+
+
+@dataclass
 class HRMState:
     currency: str
     high_level_direction: str = "neutral"
     low_level_accuracy: float = 0.0
-    predictions: List[float] = field(default_factory=list)
-    actuals: List[float] = field(default_factory=list)
 
 
-class HighLevelModule(nn.Module):
-    """Shared module that sees the whole graph — encodes competitive landscape."""
-    def __init__(self, n_nodes: int, h_dim: int = 8):
+class Encoder(nn.Module):
+    def __init__(self, n_nodes: int, h_dim: int = 16, z_dim: int = 8):
         super().__init__()
-        self.n_nodes = n_nodes
-        self.h_dim = h_dim
-        self.embed = nn.Linear(n_nodes, n_nodes * h_dim)
-        nn.init.xavier_uniform_(self.embed.weight, gain=0.1)
-        nn.init.zeros_(self.embed.bias)
+        self.fc1 = nn.Linear(n_nodes, h_dim)
+        self.fc_mu = nn.Linear(h_dim, z_dim)
+        self.fc_logvar = nn.Linear(h_dim, z_dim)
+    
+    def forward(self, node_heights: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = torch.relu(self.fc1(node_heights))
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        return mu, logvar
 
-    def forward(self, node_heights: torch.Tensor) -> torch.Tensor:
-        x = self.embed(node_heights)
-        return x.view(-1, self.n_nodes, self.h_dim)
 
-
-class LowLevelModule(nn.Module):
-    """Per-edge head: fisheye + both coin embeddings -> velocity."""
-    def __init__(self, x_pixels: int, h_dim: int = 8):
+class Decoder(nn.Module):
+    def __init__(self, x_pixels: int, z_dim: int = 8):
         super().__init__()
-        self.head = nn.Linear(x_pixels + 2 * h_dim, 1)
-        nn.init.zeros_(self.head.weight)
-        nn.init.zeros_(self.head.bias)
+        self.fc = nn.Linear(x_pixels + z_dim, 1)
+        nn.init.zeros_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
+    
+    def forward(self, fisheye: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([fisheye, z], dim=-1)
+        return self.fc(x).squeeze(-1)
 
-    def forward(self, fisheye: torch.Tensor, base_embed: torch.Tensor, quote_embed: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([fisheye, base_embed, quote_embed], dim=-1)
-        return self.head(x).squeeze(-1)
+
+class HRM_VAE(nn.Module):
+    def __init__(self, n_nodes: int, x_pixels: int, h_dim: int = 16, z_dim: int = 8):
+        super().__init__()
+        self.encoder = Encoder(n_nodes, h_dim, z_dim)
+        self.decoder = Decoder(x_pixels, z_dim)
+        self.z_dim = z_dim
+    
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+    
+    def forward(self, node_heights: torch.Tensor, fisheye: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mu, logvar = self.encoder(node_heights)
+        z = self.reparameterize(mu, logvar)
+        velocity = self.decoder(fisheye, z)
+        return velocity, mu, logvar
 
 
 class AccelModel:
-    def __init__(self, n_edges: int, sequence_length: int = 8, learning_rate: float = 0.001,
-                 y_depth: int = 200, x_pixels: int = 20, curvature: float = 2.0, h_dim: int = 8, **kwargs):
-        self.n_edges = n_edges
-        self.sequence_length = sequence_length
+    def __init__(self, n_edges: int = 0, sequence_length: int = 8, learning_rate: float = 0.001,
+                 y_depth: int = 200, x_pixels: int = 20, curvature: float = 2.0,
+                 h_dim: int = 16, z_dim: int = 8, prediction_depth: int = 1, **kwargs):
         self.y_depth = y_depth
         self.x_pixels = x_pixels
         self._lr = learning_rate
         self.curvature = curvature
         self.h_dim = h_dim
+        self.z_dim = z_dim
+        self.prediction_depth = prediction_depth
 
         self.edge_names: List[Tuple[str, str]] = []
-        self.edge_to_idx: Dict[Tuple[str, str], int] = {}
         self.node_names: List[str] = []
         self.node_to_idx: Dict[str, int] = {}
-        self.edge_list: List[Tuple[int, int]] = []
 
-        self._high_level: Optional[HighLevelModule] = None
-        self._low_level: Dict[Tuple[str, str], LowLevelModule] = {}
+        self._model: Optional[HRM_VAE] = None
         self._optimizer: Optional[optim.Optimizer] = None
 
         self.hrm_state: Dict[str, HRMState] = {}
-        self._accel_buffer: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self._close_buffer: Dict[Tuple[str, str], List[float]] = defaultdict(list)
-        self._direction_buffer: Dict[str, List[str]] = defaultdict(list)
-
-        self._bar_count = 0
-        self._high_level_update_freq = 10
         self._max_history = max(y_depth + 100, 500)
-
-        self._node_heights_buffer: Dict[str, List[float]] = defaultdict(list)
+        
+        self._kl_weight = 0.01
+        
+        self._prediction_queue: Dict[Tuple[str, str], deque] = {}
 
     def register_edges(self, edges: List[Tuple[str, str]]):
         self.edge_names = edges
@@ -123,21 +142,11 @@ class AccelModel:
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
         n_nodes = len(self.node_names)
 
-        self.edge_list = []
-        for base, quote in edges:
-            self.edge_list.append((self.node_to_idx[base], self.node_to_idx[quote]))
-            self.edge_to_idx[(base, quote)] = len(self.edge_list) - 1
-
-        self._high_level = HighLevelModule(n_nodes, self.h_dim)
-
+        self._model = HRM_VAE(n_nodes, self.x_pixels, self.h_dim, self.z_dim)
+        self._optimizer = optim.Adam(self._model.parameters(), lr=self._lr)
+        
         for edge in edges:
-            if edge not in self._low_level:
-                self._low_level[edge] = LowLevelModule(self.x_pixels, self.h_dim)
-
-        all_params = list(self._high_level.parameters())
-        for ll in self._low_level.values():
-            all_params.extend(ll.parameters())
-        self._optimizer = optim.Adam(all_params, lr=self._lr)
+            self._prediction_queue[edge] = deque(maxlen=self.prediction_depth)
 
     def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
         closes = self._close_buffer.get(edge, [])
@@ -151,23 +160,12 @@ class AccelModel:
             values.append(0.0)
         return values
 
-    def _get_node_heights(self, graph) -> torch.Tensor:
+    def _get_node_heights(self, graph) -> np.ndarray:
         heights = np.zeros(len(self.node_names), dtype=np.float32)
         for i, node in enumerate(self.node_names):
             if hasattr(graph, 'node_state') and node in graph.node_state:
                 heights[i] = float(graph.node_state[node].height)
-            else:
-                heights[i] = 0.0
-        return torch.from_numpy(heights)
-
-    def _forward(self, edge: Tuple[str, str], node_embeddings: torch.Tensor) -> torch.Tensor:
-        base, quote = edge
-        base_idx = self.node_to_idx.get(base, 0)
-        quote_idx = self.node_to_idx.get(quote, 0)
-        base_embed = node_embeddings[0, base_idx, :]
-        quote_embed = node_embeddings[0, quote_idx, :]
-        fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32)
-        return self._low_level[edge](fisheye.unsqueeze(0), base_embed.unsqueeze(0), quote_embed.unsqueeze(0))
+        return heights
 
     def update_prices(self, graph, bar_idx: int):
         if bar_idx < 0:
@@ -182,13 +180,30 @@ class AccelModel:
                     if len(buf) > self._max_history:
                         self._close_buffer[edge] = buf[-self._max_history:]
 
-    def predict(self, graph) -> Dict[Tuple[str, str], float]:
-        if not self.edge_names or self._high_level is None:
+    def predict(self, graph, bar_idx: int = -1) -> Dict[Tuple[str, str], float]:
+        if not self.edge_names or self._model is None:
             return {}
+        
+        node_heights_arr = self._get_node_heights(graph)
+        node_heights = torch.from_numpy(node_heights_arr).unsqueeze(0)
+        
+        predictions = {}
         with torch.no_grad():
-            node_heights = self._get_node_heights(graph)
-            node_embeddings = self._high_level(node_heights.unsqueeze(0))
-            return {edge: float(self._forward(edge, node_embeddings)) for edge in self.edge_names}
+            for edge in self.edge_names:
+                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32).unsqueeze(0)
+                vel, _, _ = self._model(node_heights, fisheye)
+                predicted_velocity = float(vel)
+                predictions[edge] = predicted_velocity
+                
+                self._prediction_queue[edge].append(PredictionFrame(
+                    edge=edge,
+                    predicted_velocity=predicted_velocity,
+                    fisheye=self._get_fisheye(edge),
+                    node_heights=node_heights_arr.copy(),
+                    bar_idx=bar_idx
+                ))
+        
+        return predictions
 
     def _hyperbolic_loss(self, pred: torch.Tensor, actual: float) -> torch.Tensor:
         pred_val = float(pred.detach())
@@ -206,49 +221,53 @@ class AccelModel:
 
     def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1,
                actual_velocities: Optional[Dict[Tuple[str, str], float]] = None) -> Optional[float]:
-        if not self.edge_names or not actual_accels or self._optimizer is None or self._high_level is None:
+        if not self.edge_names or self._model is None or self._optimizer is None:
             return None
 
         self.update_prices(graph, bar_idx)
-
         targets = actual_velocities if actual_velocities else actual_accels
 
         self._optimizer.zero_grad()
         
-        node_heights = self._get_node_heights(graph)
-        node_embeddings = self._high_level(node_heights.unsqueeze(0))
+        total_pred_loss = torch.tensor(0.0)
+        total_kl_loss = torch.tensor(0.0)
+        n_scored = 0
         
-        total_loss = torch.tensor(0.0)
-        n = 0
         for edge in self.edge_names:
+            queue = self._prediction_queue.get(edge)
+            if not queue or len(queue) < self.prediction_depth:
+                continue
+            
+            frame = queue[0]
             actual = targets.get(edge, 0.0)
-            pred = self._forward(edge, node_embeddings)
-            loss = self._hyperbolic_loss(pred, actual)
-            total_loss = total_loss + loss
-            n += 1
-
+            
+            node_heights = torch.from_numpy(frame.node_heights).unsqueeze(0)
+            fisheye = torch.tensor(frame.fisheye, dtype=torch.float32).unsqueeze(0)
+            
+            pred, mu, logvar = self._model(node_heights, fisheye)
+            
+            pred_loss = self._hyperbolic_loss(pred, actual)
+            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+            
+            total_pred_loss = total_pred_loss + pred_loss
+            total_kl_loss = total_kl_loss + kl_loss
+            n_scored += 1
+            
             base, _ = edge
             if base in self.hrm_state:
                 hs = self.hrm_state[base]
-                hs.predictions.append(float(pred.detach()))
-                hs.actuals.append(actual)
-                if len(hs.predictions) > 100:
-                    hs.predictions.pop(0)
-                    hs.actuals.pop(0)
-                if len(hs.predictions) > 10:
-                    with np.errstate(invalid='ignore'):
-                        corr = np.corrcoef(hs.predictions, hs.actuals)[0, 1]
-                    hs.low_level_accuracy = 0.0 if np.isnan(corr) else corr
+                hs.low_level_accuracy = hs.low_level_accuracy * 0.99 + (
+                    1.0 if (float(pred.detach()) > 0) == (actual > 0) else 0.0
+                ) * 0.01
 
-        if n > 0:
-            loss = total_loss / n
+        if n_scored > 0:
+            loss = total_pred_loss / n_scored + self._kl_weight * total_kl_loss / n_scored
             loss.backward()
             self._optimizer.step()
             return float(loss)
         return 0.0
 
     def high_level_plan(self, graph) -> Dict[str, str]:
-        self._bar_count += 1
         for node in self.node_names:
             if node not in self.hrm_state:
                 self.hrm_state[node] = HRMState(currency=node)
@@ -265,13 +284,9 @@ class AccelModel:
                     dir_map[node] = "neutral"
             else:
                 dir_map[node] = "neutral"
-
             self.hrm_state[node].high_level_direction = dir_map[node]
-            self._direction_buffer[node].append(dir_map[node])
-            if len(self._direction_buffer[node]) > self.sequence_length:
-                self._direction_buffer[node].pop(0)
 
-        return {c: hs.high_level_direction for c, hs in self.hrm_state.items()}
+        return dir_map
 
     def get_hrm_stats(self) -> List[Dict]:
         return [
@@ -281,31 +296,22 @@ class AccelModel:
         ]
 
     def save(self, path: str = "model_weights.pt"):
-        if self._high_level is None:
+        if self._model is None:
             return
         state = {
-            'high_level': self._high_level.state_dict(),
-            'low_level': {str(k): v.state_dict() for k, v in self._low_level.items()},
+            'model': self._model.state_dict(),
             'x_pixels': self.x_pixels,
             'y_depth': self.y_depth,
             'curvature': self.curvature,
             'h_dim': self.h_dim,
+            'z_dim': self.z_dim,
+            'prediction_depth': self.prediction_depth,
         }
         torch.save(state, path)
-        print(f"Saved model weights to {path}")
 
     def load(self, path: str = "model_weights.pt"):
         if not Path(path).exists():
             return
         state = torch.load(path, weights_only=True)
-        
-        if 'high_level' in state and self._high_level is not None:
-            self._high_level.load_state_dict(state['high_level'])
-        
-        for k_str, sd in state.get('low_level', {}).items():
-            inner = k_str.strip("()").replace("'", "")
-            parts = [p.strip() for p in inner.split(",")]
-            edge = (parts[0], parts[1])
-            if edge in self._low_level:
-                self._low_level[edge].load_state_dict(sd)
-        print(f"Loaded model weights from {path}")
+        if self._model is not None and 'model' in state:
+            self._model.load_state_dict(state['model'])
