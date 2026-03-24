@@ -1,6 +1,7 @@
 import numpy as np
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -59,20 +60,17 @@ class AccelModel:
         self.y_depth = y_depth
         self.x_pixels = x_pixels
         self._lr = learning_rate
+        self.curvature = curvature
+
         self.edge_names: List[Tuple[str, str]] = []
         self.edge_to_idx: Dict[Tuple[str, str], int] = {}
         self.node_names: List[str] = []
         self.node_to_idx: Dict[str, int] = {}
         self.edge_list: List[Tuple[int, int]] = []
 
-        self._default_curvature = curvature
-        self._default_y_depth = y_depth
-        self._default_x_pixels = x_pixels
-
-        self._edge_curvature: Dict[Tuple[str, str], nn.Parameter] = {}
-        self._edge_y_depth: Dict[Tuple[str, str], nn.Parameter] = {}
-        self._edge_x_pixels: Dict[Tuple[str, str], nn.Parameter] = {}
-        self._curve_optimizer = None
+        # Per-edge linear head: fisheye(x_pixels) -> velocity scalar
+        self._edge_linear: Dict[Tuple[str, str], nn.Linear] = {}
+        self._optimizer: Optional[optim.Optimizer] = None
 
         self.hrm_state: Dict[str, HRMState] = {}
         self._accel_buffer: Dict[Tuple[str, str], List[float]] = defaultdict(list)
@@ -90,39 +88,39 @@ class AccelModel:
         for base, quote in edges:
             node_set.add(base)
             node_set.add(quote)
-
         self.node_names = sorted(list(node_set))
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
 
         self.edge_list = []
         for base, quote in edges:
-            base_idx = self.node_to_idx[base]
-            quote_idx = self.node_to_idx[quote]
-            self.edge_list.append((base_idx, quote_idx))
+            self.edge_list.append((self.node_to_idx[base], self.node_to_idx[quote]))
             self.edge_to_idx[(base, quote)] = len(self.edge_list) - 1
 
         for edge in edges:
-            self._edge_curvature[edge] = nn.Parameter(torch.tensor(self._default_curvature, dtype=torch.float32))
-            self._edge_y_depth[edge] = nn.Parameter(torch.tensor(float(self._default_y_depth), dtype=torch.float32))
-            self._edge_x_pixels[edge] = nn.Parameter(torch.tensor(float(self._default_x_pixels), dtype=torch.float32))
+            if edge not in self._edge_linear:
+                self._edge_linear[edge] = nn.Linear(self.x_pixels, 1)
+                nn.init.zeros_(self._edge_linear[edge].weight)
+                nn.init.zeros_(self._edge_linear[edge].bias)
 
-        all_edge_params = list(self._edge_curvature.values()) + list(self._edge_y_depth.values()) + list(self._edge_x_pixels.values())
-        self._curve_optimizer = optim.Adam(all_edge_params, lr=self._lr * 0.1)
+        all_params = [p for lin in self._edge_linear.values() for p in lin.parameters()]
+        self._optimizer = optim.Adam(all_params, lr=self._lr)
 
     def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
-        curvature = float(torch.clamp(self._edge_curvature[edge], 0.1, 10.0).detach())
-        y_depth = int(torch.clamp(self._edge_y_depth[edge], 10, 1000).detach())
-        x_pixels = int(torch.clamp(self._edge_x_pixels[edge], 5, 50).detach())
-        boundaries = fisheye_boundaries(y_depth, x_pixels, curvature)
         closes = self._close_buffer.get(edge, [])
         if len(closes) < 2:
             return [0.0] * self.x_pixels
-        closes_array = np.array(closes[-y_depth:])
+        boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
+        closes_array = np.array(closes[-self.y_depth:])
         values = fisheye_sample(closes_array, boundaries)
         values = values[:self.x_pixels]
         while len(values) < self.x_pixels:
             values.append(0.0)
         return values
+
+    def _forward(self, edge: Tuple[str, str]) -> torch.Tensor:
+        """fisheye features -> linear -> velocity (differentiable)."""
+        feat = torch.tensor(self._get_fisheye(edge), dtype=torch.float32)
+        return self._edge_linear[edge](feat).squeeze(-1)
 
     def update_prices(self, graph, bar_idx: int):
         if bar_idx < 0:
@@ -140,40 +138,47 @@ class AccelModel:
     def predict(self, graph) -> Dict[Tuple[str, str], float]:
         if not self.edge_names:
             return {}
-        predictions = {}
-        for edge in self.edge_names:
-            fisheye = self._get_fisheye(edge)
-            # Most-recent bucket is fisheye[-1]; momentum signal
-            predictions[edge] = fisheye[-1] if fisheye else 0.0
-        return predictions
+        with torch.no_grad():
+            return {edge: float(self._forward(edge)) for edge in self.edge_names}
 
-    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1) -> Optional[float]:
-        if not self.edge_names or not actual_accels:
+    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1,
+               actual_velocities: Optional[Dict[Tuple[str, str], float]] = None) -> Optional[float]:
+        if not self.edge_names or not actual_accels or self._optimizer is None:
             return None
 
         self.update_prices(graph, bar_idx)
 
-        for i, edge in enumerate(self.edge_names):
-            base, quote = edge
-            actual = actual_accels.get(edge, 0.0)
-            fisheye = self._get_fisheye(edge)
-            pred = fisheye[-1] if fisheye else 0.0
+        # Train on velocity (log return) when available — the quantity that determines PnL.
+        # Velocity has drift the model can learn; acceleration is zero-mean by construction.
+        targets = actual_velocities if actual_velocities else actual_accels
 
-            self._accel_buffer[edge].append(actual)
-            if len(self._accel_buffer[edge]) > self._max_history:
-                self._accel_buffer[edge] = self._accel_buffer[edge][-self._max_history:]
+        self._optimizer.zero_grad()
+        total_loss = torch.tensor(0.0)
+        n = 0
+        for edge in self.edge_names:
+            actual = targets.get(edge, 0.0)
+            pred = self._forward(edge)
+            total_loss = total_loss + (pred - actual) ** 2
+            n += 1
 
+            base, _ = edge
             if base in self.hrm_state:
-                self.hrm_state[base].predictions.append(pred)
-                self.hrm_state[base].actuals.append(actual)
-                if len(self.hrm_state[base].predictions) > 100:
-                    self.hrm_state[base].predictions.pop(0)
-                    self.hrm_state[base].actuals.pop(0)
-                if len(self.hrm_state[base].predictions) > 10:
+                hs = self.hrm_state[base]
+                hs.predictions.append(float(pred.detach()))
+                hs.actuals.append(actual)
+                if len(hs.predictions) > 100:
+                    hs.predictions.pop(0)
+                    hs.actuals.pop(0)
+                if len(hs.predictions) > 10:
                     with np.errstate(invalid='ignore'):
-                        corr = np.corrcoef(self.hrm_state[base].predictions, self.hrm_state[base].actuals)[0, 1]
-                    self.hrm_state[base].low_level_accuracy = 0.0 if np.isnan(corr) else corr
+                        corr = np.corrcoef(hs.predictions, hs.actuals)[0, 1]
+                    hs.low_level_accuracy = 0.0 if np.isnan(corr) else corr
 
+        if n > 0:
+            loss = total_loss / n
+            loss.backward()
+            self._optimizer.step()
+            return float(loss)
         return 0.0
 
     def high_level_plan(self, graph) -> Dict[str, str]:
@@ -208,3 +213,26 @@ class AccelModel:
              'low_level_accuracy': hs.low_level_accuracy}
             for currency, hs in self.hrm_state.items()
         ]
+
+    def save(self, path: str = "model_weights.pt"):
+        state = {
+            'edge_linear': {str(k): v.state_dict() for k, v in self._edge_linear.items()},
+            'x_pixels': self.x_pixels,
+            'y_depth': self.y_depth,
+            'curvature': self.curvature,
+        }
+        torch.save(state, path)
+        print(f"Saved model weights to {path}")
+
+    def load(self, path: str = "model_weights.pt"):
+        if not Path(path).exists():
+            return
+        state = torch.load(path, weights_only=True)
+        for k_str, sd in state['edge_linear'].items():
+            # parse "(base, quote)" string back to tuple
+            inner = k_str.strip("()").replace("'", "")
+            parts = [p.strip() for p in inner.split(",")]
+            edge = (parts[0], parts[1])
+            if edge in self._edge_linear:
+                self._edge_linear[edge].load_state_dict(sd)
+        print(f"Loaded model weights from {path}")

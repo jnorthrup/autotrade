@@ -65,6 +65,16 @@ class CandleCache:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_time ON candles(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candles_prod_gran ON candles(product_id, granularity)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS edge_params (
+                    edge VARCHAR PRIMARY KEY,
+                    curvature DOUBLE DEFAULT 2.0,
+                    y_depth INTEGER DEFAULT 200,
+                    x_pixels INTEGER DEFAULT 20,
+                    fee_rate DOUBLE DEFAULT 0.001,
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
 
     def list_products(self, granularity: str = "300") -> List[str]:
         with duckdb.connect(self.db_path, read_only=True) as conn:
@@ -85,32 +95,14 @@ class CandleCache:
             with duckdb.connect(self.db_path) as conn:
                 conn.execute("INSERT OR IGNORE INTO candles SELECT * FROM df")
 
-    def get_candles(self, product_id: str, start: datetime, end: datetime, granularity: str = "300", skip_fetch: bool = False) -> pd.DataFrame:
+    def get_candles(self, product_id: str, start: datetime, end: datetime, granularity: str = "300") -> pd.DataFrame:
+        """Pure DuckDB read. All data ingestion must happen before this call."""
         with duckdb.connect(self.db_path, read_only=True) as conn:
-            query = """
+            return conn.execute("""
                 SELECT * FROM candles
                 WHERE product_id = ? AND granularity = ? AND timestamp BETWEEN ? AND ?
                 ORDER BY timestamp
-            """
-            df = conn.execute(query, [product_id, granularity, start, end]).df()
-
-        if skip_fetch:
-            return df
-
-        gran_seconds = int(granularity)
-        expected = int((end - start).total_seconds() / gran_seconds) + 1
-
-        if len(df) < expected * 0.95:
-            print(f"[{product_id}] miss ({len(df)}/{expected}), trying WS snapshot first...")
-            try:
-                self.ws_snapshot([product_id], granularity)
-            except Exception as e:
-                print(f"  [{product_id}] ws_snapshot failed: {e}")
-
-            with duckdb.connect(self.db_path, read_only=True) as conn:
-                df = conn.execute(query, [product_id, granularity, start, end]).df()
-
-        return df
+            """, [product_id, granularity, start, end]).df()
 
     def _fetch_chunk(self, product_id: str, chunk_start: datetime, chunk_end: datetime,
                      api_gran: str, granularity: str) -> int:
@@ -221,7 +213,7 @@ class CandleCache:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def fetch_one(pid):
-            self.get_candles(pid, start, end, granularity)
+            self._fetch_and_save(pid, start, end, granularity)
             return pid
 
         remaining = list(pairs)
@@ -242,3 +234,169 @@ class CandleCache:
                         print(f"  ✗ {pid}: {e}")
                         done.append(pid)
             remaining = [p for p in remaining if p not in done]
+
+    def _binance_fetch_zip(self, url: str, dest: Path) -> bool:
+        """
+        GET url to dest if dest doesn't exist or is 0 bytes.
+        Returns True on success, False on 404 or any error.
+        File presence on disk IS the cache — no ETag, no HEAD.
+        """
+        import requests as req
+
+        if dest.exists() and dest.stat().st_size > 0:
+            return True
+
+        try:
+            resp = req.get(url, timeout=120)
+            if resp.status_code == 404:
+                return False
+            resp.raise_for_status()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.content)
+        except Exception as e:
+            print(f"  [Binance] {url}: {e}")
+            return False
+
+        return True
+
+    def import_binance_archive(self, pairs: List[str], granularity: str = "300") -> List[str]:
+        """
+        Draw-through: given a bag of pairs, fetch what is missing from disk for the
+        3-year window and ingest into DuckDB resampled to granularity seconds.
+        product_id stored in Coinbase style (USDT->USD).
+        Cache dir: ~/mpdata/klines/1m/{BASE}/{QUOTE}/ (or $MP_IMPORT/klines/...).
+        Returns product_ids successfully imported into DuckDB.
+        """
+        from datetime import date
+        import zipfile
+
+        mpdata = Path(os.environ.get("MP_IMPORT", Path.home() / "mpdata/import"))
+        gran_sec = int(granularity)
+        bucket_ms = gran_sec * 1000
+        imported: List[str] = []
+
+        today = date.today()
+        cutoff_ts = pd.Timestamp.now() - pd.Timedelta(days=3 * 365)
+        cutoff_ms = int(cutoff_ts.timestamp() * 1000)
+
+        for product_id in pairs:
+            base, quote = product_id.split("-", 1)
+            binance_quote = "USDT" if quote == "USD" else quote
+            if base == binance_quote:
+                continue  # e.g. USDT-USDT — skip
+
+            # Skip if DuckDB already has >1000 bars in the 3-year window
+            with duckdb.connect(self.db_path, read_only=True) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM candles WHERE product_id=? AND granularity=? AND timestamp >= ?",
+                    [product_id, granularity, cutoff_ts]
+                ).fetchone()
+            if row and row[0] > 1000:
+                print(f"[Binance] {product_id}: already in DuckDB ({row[0]:,} bars), skipping")
+                imported.append(product_id)
+                continue
+
+            symbol = f"{base}{binance_quote}"
+            tf = "1m"
+            cache_dir = mpdata / "klines" / "1m" / base / binance_quote
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            zip_paths: List[Path] = []
+
+            # Monthly zips: cutoff month up to (not including) current month
+            yr, mo = today.year - 3, today.month
+            while (yr, mo) < (today.year, today.month):
+                fname = f"{symbol}-{tf}-{yr:04d}-{mo:02d}"
+                zip_p = cache_dir / f"{fname}.zip"
+                url = (f"https://data.binance.vision/data/spot/monthly/klines"
+                       f"/{symbol}/{tf}/{fname}.zip")
+                if self._binance_fetch_zip(url, zip_p):
+                    zip_paths.append(zip_p)
+                mo += 1
+                if mo > 12:
+                    mo = 1
+                    yr += 1
+
+            # Daily zips: days 1 through yesterday of the current partial month
+            for day in range(1, today.day):
+                d = date(today.year, today.month, day)
+                fname = f"{symbol}-{tf}-{d.isoformat()}"
+                zip_p = cache_dir / f"{fname}.zip"
+                url = (f"https://data.binance.vision/data/spot/daily/klines"
+                       f"/{symbol}/{tf}/{fname}.zip")
+                if self._binance_fetch_zip(url, zip_p):
+                    zip_paths.append(zip_p)
+
+            if not zip_paths:
+                print(f"[Binance] no archive data for {product_id}")
+                continue
+
+            # Extract CSVs from zips, read into DataFrames, then delete extracted CSVs
+            try:
+                dfs = []
+                for zp in zip_paths:
+                    try:
+                        with zipfile.ZipFile(zp) as zf:
+                            names = [n for n in zf.namelist() if n.endswith(".csv")]
+                            if names:
+                                dfs.append(pd.read_csv(zf.open(names[0]), header=None, usecols=[0, 1, 2, 3, 4, 5]))
+                    except Exception:
+                        pass
+                if not dfs:
+                    print(f"[Binance] {product_id}: could not read any CSVs")
+                    continue
+
+                df = pd.concat(dfs)
+                df = df.drop_duplicates(subset=[0]).sort_values(0)
+                df.columns = ["ts", "open", "high", "low", "close", "volume"]
+                df = df.dropna()
+                df["ts"] = df["ts"].astype("int64")
+                df = df[df["ts"] >= cutoff_ms].reset_index(drop=True)
+                if df.empty:
+                    print(f"[Binance] {product_id}: no data in last 3 years")
+                    continue
+
+                df["bucket"] = (df["ts"] // bucket_ms) * bucket_ms
+                resampled = df.groupby("bucket").agg(
+                    open=("open",   "first"),
+                    high=("high",   "max"),
+                    low=("low",    "min"),
+                    close=("close", "last"),
+                    volume=("volume", "sum"),
+                ).reset_index()
+                resampled["timestamp"] = pd.to_datetime(resampled["bucket"], unit="ms")
+                resampled["product_id"] = product_id
+                resampled["granularity"] = granularity
+                out = resampled[["product_id", "timestamp", "open", "high", "low", "close", "volume", "granularity"]]
+                self.save_candles(out)
+                yrs = len(out) * gran_sec / (365.25 * 86400)
+                print(f"[Binance] {product_id}: {len(out):,} bars imported ({yrs:.1f}yr)")
+                imported.append(product_id)
+            except Exception as e:
+                print(f"[Binance] {product_id}: {e}")
+
+        return imported
+
+    def save_edge_params(self, params: dict):
+        """Upsert edge params. params = {edge_str: {curvature, y_depth, x_pixels, fee_rate}}"""
+        with _db_lock:
+            with duckdb.connect(self.db_path) as conn:
+                for edge, p in params.items():
+                    conn.execute("""
+                        INSERT INTO edge_params (edge, curvature, y_depth, x_pixels, fee_rate, updated_at)
+                        VALUES (?, ?, ?, ?, ?, now())
+                        ON CONFLICT (edge) DO UPDATE SET
+                            curvature=excluded.curvature,
+                            y_depth=excluded.y_depth,
+                            x_pixels=excluded.x_pixels,
+                            fee_rate=excluded.fee_rate,
+                            updated_at=excluded.updated_at
+                    """, [edge, p['curvature'], p['y_depth'], p['x_pixels'], p['fee_rate']])
+
+    def load_edge_params(self) -> dict:
+        """Returns {edge_str: {curvature, y_depth, x_pixels, fee_rate}}"""
+        with duckdb.connect(self.db_path, read_only=True) as conn:
+            rows = conn.execute(
+                "SELECT edge, curvature, y_depth, x_pixels, fee_rate FROM edge_params"
+            ).fetchall()
+        return {r[0]: {'curvature': r[1], 'y_depth': r[2], 'x_pixels': r[3], 'fee_rate': r[4]} for r in rows}

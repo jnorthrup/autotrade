@@ -8,30 +8,15 @@ import random
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-# Parse args early to allow patching before importing coin_graph
-_parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument('--skip-fetch', action='store_true')
-_early_args, _ = _parser.parse_known_args()
-
-if _early_args.skip_fetch:
-    # Patch candle_cache before it's imported by coin_graph
-    import candle_cache
-    original_get_candles = candle_cache.CandleCache.get_candles
-    def patched_get_candles(self, product_id, start, end, granularity="300", skip_fetch=True):
-        return original_get_candles(self, product_id, start, end, granularity, skip_fetch=True)
-    candle_cache.CandleCache.get_candles = patched_get_candles
-    candle_cache.CandleCache.ws_snapshot = lambda self, *args, **kwargs: None
-    candle_cache.CandleCache.prefetch_all = lambda self, *args, **kwargs: None
-
 from coinbase.websocket import WSClient
 
 from accel_model import AccelModel as PyTorchAccelModel
-from coin_graph import CoinGraph
+from coin_graph import CoinGraph, EdgeState, NodeState
 from portfolio_manager import PortfolioManager, Position
 
 BAR_SECONDS = 300  # 5-minute bars
@@ -247,7 +232,7 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
                     break
 
         # 1. REVEAL bar t actual data
-        edge_accels = graph.update(bar_idx)
+        edge_accels, edge_velocities = graph.update(bar_idx)
 
         # 2. COLLECT PnL for trade decided at bar t-1 (actual bar t return now known)
         if pending_trade is not None:
@@ -267,7 +252,7 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
                 holding = quote  # always move — no retroactive undo
 
         # 3. TRAIN on bar t (no future leakage — bar t is now fully known)
-        loss = accel_model.update(graph, edge_accels, bar_idx)
+        loss = accel_model.update(graph, edge_accels, bar_idx, actual_velocities=edge_velocities)
         if loss is not None:
             total_loss += loss
             n_updates += 1
@@ -285,12 +270,19 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
             graph._compute_heights(predicted_accels)
 
         # 5. DECIDE trade for bar t+1 based solely on predictions
+        #
+        # Band of disinterest: each edge has a PTT (profit-take threshold)
+        # and stop-loss derived from its own volatility + fees.
+        # Predictions inside the band are noise — don't trade.
+        # Only trade when the prediction breaks above the edge's noise floor.
         target = graph.best_target()
         candidate = graph.next_hop(holding, target)
-        if candidate is not None and predicted_accels.get(candidate, 0) > 0:
-            pending_trade = candidate
+        if candidate is not None and predicted_accels:
+            pred = predicted_accels.get(candidate, 0)
+            es = graph.edge_state.get(candidate)
+            pending_trade = candidate if es and pred > es.ptt else None
         else:
-            pending_trade = None  # no positive signal — hold
+            pending_trade = None
 
         if pending_trade is not None:
             paths = graph.dijkstra(holding)
@@ -315,62 +307,215 @@ def run_simulation(graph: CoinGraph, accel_model: PyTorchAccelModel, start_bar: 
     return capital, n_trades, path_tracking, quote_tracking
 
 
+def _build_pair_adjacency(all_pairs: List[str]) -> Dict[str, List[str]]:
+    """Build currency -> [product_id] adjacency from the full bag.
+    Pairs sharing a currency are 'related' (same cluster)."""
+    adj: Dict[str, List[str]] = {}
+    for pid in all_pairs:
+        parts = pid.split("-", 1)
+        if len(parts) != 2:
+            continue
+        for currency in parts:
+            adj.setdefault(currency, []).append(pid)
+    return adj
+
+
+def _select_related_pairs(all_pairs: List[str], adj: Dict[str, List[str]],
+                          n_pairs: int, rng: random.Random) -> List[str]:
+    """Pick n_pairs related pairs via random-walk on the currency adjacency graph.
+    Start from a random currency, greedily expand through shared currencies
+    so the subset is a connected cluster, not random garbage."""
+    if n_pairs >= len(all_pairs):
+        return list(all_pairs)
+
+    currencies = list(adj.keys())
+    if not currencies:
+        return list(all_pairs)[:n_pairs]
+
+    selected = set()
+    # Start from a random currency hub
+    seed_currency = rng.choice(currencies)
+    frontier = [seed_currency]
+    visited_currencies = {seed_currency}
+
+    while len(selected) < n_pairs and frontier:
+        curr = frontier.pop(0)
+        # Add all pairs touching this currency (up to budget)
+        candidates = [p for p in adj.get(curr, []) if p not in selected]
+        rng.shuffle(candidates)
+        for pid in candidates:
+            if len(selected) >= n_pairs:
+                break
+            selected.add(pid)
+            # Expand frontier to the other side of this pair
+            parts = pid.split("-", 1)
+            for c in parts:
+                if c not in visited_currencies:
+                    visited_currencies.add(c)
+                    frontier.append(c)
+
+        # If frontier exhausted but still need more, pick a new random seed
+        if not frontier and len(selected) < n_pairs:
+            remaining = [c for c in currencies if c not in visited_currencies]
+            if remaining:
+                new_seed = rng.choice(remaining)
+                frontier.append(new_seed)
+                visited_currencies.add(new_seed)
+
+    return list(selected)
+
+
+def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
+                      start_bar: int, end_bar: int) -> CoinGraph:
+    """Build a lightweight CoinGraph for one trial from pre-loaded data.
+    Shares DataFrames (no copy), just slices timestamps."""
+    trial = CoinGraph(fee_rate=full_graph.fee_rate)
+    trial.all_pairs = selected_pairs
+
+    # Map product_id -> edges in the full graph
+    pair_to_edges = {}
+    for pid in full_graph.all_pairs:
+        parts = pid.split("-", 1)
+        if len(parts) == 2:
+            pair_to_edges[pid] = (parts[0], parts[1])
+
+    for pid in selected_pairs:
+        if pid not in pair_to_edges:
+            continue
+        base, quote = pair_to_edges[pid]
+        for edge in [(base, quote), (quote, base)]:
+            if edge in full_graph.edges:
+                trial.edges[edge] = full_graph.edges[edge]
+                # Match CoinGraph.load() convention: both directions store base/quote from product_id
+                trial.edge_state[edge] = EdgeState(base=base, quote=quote)
+        trial.nodes.add(base)
+        trial.nodes.add(quote)
+        trial.node_state.setdefault(base, NodeState(currency=base))
+        trial.node_state.setdefault(quote, NodeState(currency=quote))
+
+    # Slice the common_timestamps to the window
+    trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
+    # Re-index: trial simulation will run from bar 0 to len(trial.common_timestamps)
+    return trial
+
+
 def run_autoresearch(graph: CoinGraph, max_minutes: int = 5, pm_mode: str = 'single_asset'):
     import duckdb
     import random
-    
+
     conn = duckdb.connect('candles.duckdb')
-    
+
     _init_leaderboard_tables(conn)
-    
+    # Add bag_spec column if missing
+    try:
+        conn.execute("ALTER TABLE experiments ADD COLUMN bag_spec VARCHAR DEFAULT ''")
+    except Exception:
+        pass  # column already exists
+
     best_bpb = float('inf')
     best_params = None
-    
-    print("\nStarting infinite autoresearch loop. Press Ctrl+C to stop.")
+
+    # Pre-compute pair adjacency for related-pair selection
+    adj = _build_pair_adjacency(graph.all_pairs)
+    total_bars = len(graph.common_timestamps)
+    total_pairs = len(graph.all_pairs)
+    rng = random.Random()  # dedicated RNG for bag selection
+
+    # Curriculum bounds
+    MIN_PAIRS = max(4, total_pairs // 8)
+    MAX_PAIRS = total_pairs
+    MIN_WINDOW_BARS = max(200, total_bars // 20)
+    MAX_WINDOW_BARS = total_bars
+
+    trial = 0
+    print(f"\nStarting autoresearch with stochastic bags.")
+    print(f"  Full bag: {total_pairs} pairs, {total_bars} bars")
+    print(f"  Curriculum: pairs [{MIN_PAIRS}..{MAX_PAIRS}], window [{MIN_WINDOW_BARS}..{MAX_WINDOW_BARS}] bars")
+    print(f"  Press Ctrl+C to stop.\n")
+
     try:
         while True:
+            trial += 1
+            # Curriculum progression: smooth ramp from 0 to 1
+            progress = min(1.0, trial / 200.0)
+
+            # --- Stochastic bag spec ---
+            # Pair count: ramp from MIN to MAX with noise
+            pair_ceil = int(MIN_PAIRS + (MAX_PAIRS - MIN_PAIRS) * progress)
+            n_pairs = rng.randint(MIN_PAIRS, max(MIN_PAIRS, pair_ceil))
+            selected_pairs = _select_related_pairs(graph.all_pairs, adj, n_pairs, rng)
+            n_pairs = len(selected_pairs)  # actual selected (may be fewer if bag is small)
+
+            # Window size: ramp from MIN to MAX with noise
+            window_ceil = int(MIN_WINDOW_BARS + (MAX_WINDOW_BARS - MIN_WINDOW_BARS) * progress)
+            window_bars = rng.randint(MIN_WINDOW_BARS, max(MIN_WINDOW_BARS, window_ceil))
+            window_bars = min(window_bars, total_bars)
+
+            # Stochastic start within available range
+            max_start = max(0, total_bars - window_bars)
+            start_bar = rng.randint(0, max_start) if max_start > 0 else 0
+            end_bar = start_bar + window_bars
+
+            window_days = round(window_bars * 5 / (60 * 24), 1)  # 5-min bars -> days
+
+            # Build trial graph from pre-loaded data (no fetches)
+            trial_graph = _make_trial_graph(graph, selected_pairs, start_bar, end_bar)
+            if not trial_graph.edges:
+                print(f"Trial {trial}: empty graph, skipping")
+                continue
+
+            # --- Stochastic hyperparams (unchanged) ---
             lr = 10 ** random.uniform(-4, -1.5)
             width = random.choice([32, 64, 128, 256])
             y_depth = random.choice([100, 200, 300, 400])
             x_pixels = random.choice([10, 15, 20, 30])
             curvature = random.uniform(0.5, 4.0)
-            
-            params = {'lr': lr, 'width': width, 'y_depth': y_depth, 'x_pixels': x_pixels, 'curvature': curvature}
-            print(f"\n--- Autoresearch Epoch ---")
-            print(f"Testing: lr={lr:.5f}, width={width}, y_depth={y_depth}, x_pixels={x_pixels}, curvature={curvature:.3f}")
-            
-            accel_model = AccelModel(
-                n_edges=len(graph.edges),
+
+            params = {'lr': lr, 'width': width, 'y_depth': y_depth,
+                      'x_pixels': x_pixels, 'curvature': curvature}
+            bag_spec = {'n_pairs': n_pairs, 'window_bars': window_bars,
+                        'window_days': window_days, 'start_bar': start_bar,
+                        'pairs': [p for p in selected_pairs[:8]]}  # first 8 for logging
+
+            print(f"\n--- Trial {trial} (progress={progress:.2f}) ---")
+            print(f"  Bag: {n_pairs} pairs, {window_bars} bars ({window_days}d), start={start_bar}")
+            print(f"  Hyper: lr={lr:.5f}, width={width}, y_depth={y_depth}, x_pixels={x_pixels}, curvature={curvature:.3f}")
+
+            accel_model = PyTorchAccelModel(
+                n_edges=len(trial_graph.edges),
                 sequence_length=params['x_pixels'],
                 learning_rate=params['lr'],
                 y_depth=params['y_depth'],
                 x_pixels=params['x_pixels'],
                 curvature=params['curvature']
             )
-            accel_model.register_edges(list(graph.edges.keys()))
-            
-            pnl, n_trades, _, _ = run_simulation(graph, accel_model, print_every=1000, pm_mode=pm_mode)
-            
+            accel_model.register_edges(list(trial_graph.edges.keys()))
+
+            pnl, n_trades, _, _ = run_simulation(
+                trial_graph, accel_model, print_every=1000, pm_mode=pm_mode
+            )
+
             if n_trades > 0:
                 val_bpb = -pnl / n_trades
             else:
                 val_bpb = 999.0
-            
-            status = "completed"
+
             if val_bpb < best_bpb:
                 best_bpb = val_bpb
-                best_params = params
-                print(f"--> [NEW BEST] val_bpb: {best_bpb:.6f}")
+                best_params = {**params, **bag_spec}
+                print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
             else:
-                print(f"Epoch val_bpb: {val_bpb:.6f} (Best: {best_bpb:.6f})")
-            
-            # Persist directly to DuckDB
-            conn.execute("INSERT INTO experiments (timestamp, val_bpb, params) VALUES (now(), ?, ?)", 
-                         [val_bpb, str(params)])
-            
+                print(f"  val_bpb: {val_bpb:.6f} (Best: {best_bpb:.6f})")
+
+            # Persist to DuckDB with bag spec
+            conn.execute(
+                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec) VALUES (now(), ?, ?, ?)",
+                [val_bpb, str(params), str(bag_spec)]
+            )
+
     except KeyboardInterrupt:
         print("\nInterrupted autoresearch.")
-        
+
     if best_params:
         print(f"Overall Best: val_bpb={best_bpb:.6f} with {best_params}")
     return best_params
@@ -502,15 +647,19 @@ def main():
     parser.add_argument('--max-partners', type=int, default=None, help='Maximum connections to include a coin')
     parser.add_argument('--ane', action='store_true', help='Use ANE-accelerated model (MLX) instead of PyTorch')
     parser.add_argument('--skip-fetch', action='store_true', help='Skip network fetches, use cached data only')
+    parser.add_argument('--exchange', type=str, default='coinbase', choices=['coinbase', 'binance'],
+                        help='Data source: coinbase (live/WS) or binance (archive CSV->DuckDB)')
     args = parser.parse_args()
-    
+
     print("Loading coin graph...")
     graph = CoinGraph(fee_rate=0.001)
     n_bars = graph.load(
-        lookback_days=1 if args.live else 365, 
+        lookback_days=1 if args.live else (1095 if args.exchange == "binance" else 365),
         refresh_bag=args.refresh_bag,
         min_partners=args.min_partners,
-        max_partners=args.max_partners
+        max_partners=args.max_partners,
+        exchange=args.exchange,
+        skip_fetch=args.skip_fetch,
     )
     print(f"Loaded {len(graph.nodes)} nodes, {len(graph.edges)} edges, {n_bars} bars")
     
@@ -527,6 +676,7 @@ def main():
     
     accel_model = AccelModel(n_edges=len(graph.edges), sequence_length=8, y_depth=200, x_pixels=20, curvature=2.0)
     accel_model.register_edges(list(graph.edges.keys()))
+    accel_model.load("model_weights.pt")
 
     ws = None
     if args.live:

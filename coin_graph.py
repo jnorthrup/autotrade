@@ -31,6 +31,8 @@ class EdgeState:
     streak: int = 0
     temperature: float = 1.0
     volatility_window: List[float] = field(default_factory=list)
+    ptt: float = 0.0
+    stop_loss: float = 0.0
     wins: int = 0
     losses: int = 0
 
@@ -58,7 +60,8 @@ class CoinGraph:
 
     def load(self, db_path: Optional[str] = None, granularity: str = None,
              min_partners: int = 5, max_partners: Optional[int] = None,
-             lookback_days: int = 365, refresh_bag: bool = False) -> int:
+             lookback_days: int = 365, refresh_bag: bool = False,
+             exchange: str = "coinbase", skip_fetch: bool = False) -> int:
         db_path = db_path or str(Config.DB_PATH)
         granularity = granularity or Config.DEFAULT_GRANULARITY
 
@@ -96,14 +99,21 @@ class CoinGraph:
                 if len(partners) >= min_partners and (max_partners is None or len(partners) <= max_partners)
             }
 
+            FIAT_EXCLUDE = {"GBP", "EUR"}
+            usd_bases = {p.split("-")[0] for p in real_products if p.endswith("-USD")}
+
             seen = set()
             for pid in real_products:
                 base, quote = pid.split("-", 1)
+                if quote in FIAT_EXCLUDE or base in FIAT_EXCLUDE:
+                    continue
+                if quote in ("USDC", "USDT") and base in usd_bases:
+                    continue  # prefer USD over USDC/USDT for same base
                 if base in coin_set and quote in coin_set:
                     canonical = tuple(sorted([base, quote]))
                     if canonical not in seen:
                         seen.add(canonical)
-                        pairs.append(pid)  # use actual Coinbase product_id
+                        pairs.append(pid)
             
             # Persist the bag
             try:
@@ -120,25 +130,25 @@ class CoinGraph:
         end = datetime.now()
         start = end - timedelta(days=lookback_days)
 
-        if Config.USE_WS_ONLY:
-            # In pure websocket mode, we rely on snapshot and then fill missing candles from cache only.
+        if skip_fetch:
+            pass  # use only what's already in DuckDB
+        elif exchange == "binance":
+            print("[CoinGraph] Binance mode: importing archive CSVs into DuckDB")
+            pairs = self.cache.import_binance_archive(pairs, granularity)
+        elif Config.USE_WS_ONLY:
             print("[CoinGraph] USE_WS_ONLY enabled: using ws_snapshot and skipping REST prefetch")
             try:
                 self.cache.ws_snapshot(pairs, granularity)
             except Exception as e:
                 print(f"[CoinGraph] WS snapshot failed: {e}")
         elif lookback_days <= 2:
-            # Live mode: one WS connection, subscribe all pairs to candles, collect snapshots
             self.cache.ws_snapshot(pairs, granularity)
         else:
-            # Prefer WS snapshot first to avoid REST 429 and reduce RESTClient pressure.
             try:
                 print("[CoinGraph] trying WS snapshot first for better scaling")
                 self.cache.ws_snapshot(pairs, granularity)
             except Exception as e:
                 print(f"[CoinGraph] WS snapshot initial pass failed: {e}")
-
-            # Still run REST prefetch to fill any missing historical bars if needed
             self.cache.prefetch_all(pairs, start, end, granularity)
 
         for product_id in pairs:
@@ -161,32 +171,31 @@ class CoinGraph:
 
     def hydrate_increment(self, days: int = 7) -> int:
         """
-        Actively pulls more data from the cache (potentially API) for all pairs.
-        Used by the simulation loop to 'keep proceeding' when cache is partial.
+        Fetch and merge more historical bars for all pairs.
+        Explicitly fetches via REST then reads from DuckDB.
         """
         granularity = Config.DEFAULT_GRANULARITY
-        
-        # Calculate start point based on existing data or 1 year back
-        # If we have no data, start 1 year back. 
-        # If we have data, start from the latest common timestamp.
+
         if self.common_timestamps:
             start_ts = self.common_timestamps[-1]
         else:
             start_ts = datetime.now() - timedelta(days=365)
-            
+
         end_ts = start_ts + timedelta(days=days)
         if end_ts > datetime.now():
             end_ts = datetime.now()
-            
+
         if start_ts >= end_ts:
             return 0
-            
-        new_candles_count = 0
+
         print(f"Hydrating graph from {start_ts.strftime('%Y-%m-%d')} to {end_ts.strftime('%Y-%m-%d')}...")
-        
-        for (base, quote) in list(self.edges.keys()):
-            product_id = f"{base}-{quote}"
-            # This triggers the draw-through
+
+        for product_id in self.all_pairs:
+            self.cache._fetch_and_save(product_id, start_ts, end_ts, granularity)
+
+        new_candles_count = 0
+        for product_id in self.all_pairs:
+            base, quote = product_id.split("-", 1)
             df = self.cache.get_candles(product_id, start_ts, end_ts, granularity)
             
             if not df.empty:
@@ -225,60 +234,61 @@ class CoinGraph:
         self.common_timestamps = sorted(list(common))
         print(f"Aligned to {len(self.common_timestamps)} total 5m bars across {len(self.nodes)} nodes")
 
-    def update(self, bar_idx: int) -> Dict[str, float]:
+    def update(self, bar_idx: int) -> Tuple[Dict[Tuple[str, str], float], Dict[Tuple[str, str], float]]:
         if bar_idx >= len(self.common_timestamps):
-            return {}
-            
+            return {}, {}
+
         ts = self.common_timestamps[bar_idx]
-        
+
         edge_accels = {}
-        
+        edge_velocities = {}
+
         for (base, quote), df in self.edges.items():
             if ts not in df.index:
                 continue
-                
+
             row = df.loc[ts]
             close = row.get('close', 0)
             open_price = row.get('open', close)
-            
+
             log_return = 0.0
             if open_price > 0:
-                # If we are looking at the reverse pair (quote, base) then the price action implies reciprocal return
-                if (base, quote) in self.edges and hasattr(df, 'name') == False:
-                    # Need a way to tell if this is the original or inverse edge
-                    # We can check if quote is the *actual* quote of the product_id by checking the df origin, 
-                    # but simpler: compute normal log return, then inverse it if it's the reverse edge
-                    pass
-                
                 log_return = np.log(close / open_price)
-                
-                # Check if this edge is the inverted one (i.e. 'USD', 'BTC' instead of 'BTC', 'USD')
-                # We can determine this by checking if the edge tuple format matches the standard convention
-                # For now, let's explicitly store the 'original_direction' in EdgeState
-                
+
             edge_state = self.edge_state[(base, quote)]
-            
-            # Inverse log_return if this is a backward edge. 
+
+            # Inverse log_return if this is a backward edge.
             if edge_state.base != base:
                 log_return = -log_return
-                
+
             accel = log_return - edge_state.velocity
             edge_state.velocity = log_return
             edge_state.accel = accel
             edge_state.volume = row.get('volume', 0.0)
-            
+
+            # Track volatility on every edge every bar (not just traded edges)
+            edge_state.volatility_window.append(abs(log_return))
+            if len(edge_state.volatility_window) > 20:
+                edge_state.volatility_window.pop(0)
+
+            # Compute band of disinterest: fee + noise floor
+            vol = float(np.mean(edge_state.volatility_window)) if edge_state.volatility_window else 0.0
+            edge_state.ptt = self.fee_rate + vol
+            edge_state.stop_loss = -(self.fee_rate + vol)
+
             self._accel_history[(base, quote)].append(accel)
             if len(self._accel_history[(base, quote)]) > self._history_window:
                 self._accel_history[(base, quote)].pop(0)
-            
+
             edge_accels[(base, quote)] = accel
-        
+            edge_velocities[(base, quote)] = log_return
+
         self._compute_heights(edge_accels)
-        
+
         for ns in self.node_state.values():
             ns.total_bars += 1
-        
-        return edge_accels
+
+        return edge_accels, edge_velocities
 
     def _compute_heights(self, edge_accels: Dict[Tuple[str, str], float]):
         outflow_accels = defaultdict(list)
@@ -401,10 +411,6 @@ class CoinGraph:
             es.losses += 1
         
         es.conductance = np.clip(es.conductance, 0.01, 10.0)
-        
-        es.volatility_window.append(abs(es.velocity))
-        if len(es.volatility_window) > 20:
-            es.volatility_window.pop(0)
 
     def node_potentials(self) -> List[Tuple[float, str]]:
         return sorted([(ns.height, currency) for currency, ns in self.node_state.items()], reverse=True)
