@@ -59,50 +59,22 @@ class HRMState:
     low_level_accuracy: float = 0.0
 
 
-class Encoder(nn.Module):
-    def __init__(self, n_nodes: int, h_dim: int = 16, z_dim: int = 8):
+class EdgeModel(nn.Module):
+    """Per-edge velocity prediction from fisheye (candle compression)."""
+    def __init__(self, x_pixels: int, h_dim: int = 16, z_dim: int = 8):
         super().__init__()
-        # Input is 2*n_nodes: [heights, usd_prices]
-        self.fc1 = nn.Linear(n_nodes * 2, h_dim)
-        self.fc_mu = nn.Linear(h_dim, z_dim)
-        self.fc_logvar = nn.Linear(h_dim, z_dim)
+        self.encoder = nn.Sequential(
+            nn.Linear(x_pixels, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, z_dim),
+        )
+        self.decoder = nn.Linear(z_dim, 1)
+        nn.init.zeros_(self.decoder.weight)
+        nn.init.zeros_(self.decoder.bias)
     
-    def forward(self, node_heights: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = torch.relu(self.fc1(node_heights))
-        mu = self.fc_mu(h)
-        logvar = self.fc_logvar(h)
-        return mu, logvar
-
-
-class Decoder(nn.Module):
-    def __init__(self, x_pixels: int, z_dim: int = 8):
-        super().__init__()
-        self.fc = nn.Linear(x_pixels + z_dim, 1)
-        nn.init.zeros_(self.fc.weight)
-        nn.init.zeros_(self.fc.bias)
-    
-    def forward(self, fisheye: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([fisheye, z], dim=-1)
-        return self.fc(x).squeeze(-1)
-
-
-class HRM_VAE(nn.Module):
-    def __init__(self, n_nodes: int, x_pixels: int, h_dim: int = 16, z_dim: int = 8):
-        super().__init__()
-        self.encoder = Encoder(n_nodes, h_dim, z_dim)
-        self.decoder = Decoder(x_pixels, z_dim)
-        self.z_dim = z_dim
-    
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-    
-    def forward(self, node_heights: torch.Tensor, fisheye: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, logvar = self.encoder(node_heights)
-        z = self.reparameterize(mu, logvar)
-        velocity = self.decoder(fisheye, z)
-        return velocity, mu, logvar
+    def forward(self, fisheye: torch.Tensor) -> torch.Tensor:
+        z = self.encoder(fisheye)
+        return self.decoder(z).squeeze(-1)
 
 
 class AccelModel:
@@ -168,49 +140,8 @@ class AccelModel:
             values.append(0.0)
         return values
 
-    def _get_node_heights(self, graph) -> np.ndarray:
-        heights = np.zeros(len(self.node_names), dtype=np.float32)
-        usd_prices = np.zeros(len(self.node_names), dtype=np.float32)
-        usd_prices[0] = 1.0  # USD = 1 USD
-        
-        for i, node in enumerate(self.node_names):
-            if node == "USD":
-                heights[i] = 0.0
-                continue
-            if hasattr(graph, 'node_state') and node in graph.node_state:
-                heights[i] = float(graph.node_state[node].height)
-            
-            # USD price: direct pair
-            if (node, "USD") in graph.edges:
-                df = graph.edges[(node, "USD")]
-                if len(df) > 0:
-                    usd_prices[i] = float(df['close'].iloc[-1])
-            elif ("USD", node) in graph.edges:
-                df = graph.edges[("USD", node)]
-                if len(df) > 0:
-                    usd_prices[i] = 1.0 / float(df['close'].iloc[-1])
-        
-        # Fill missing USD prices via 2-hop paths: BTC -> X -> USD
-        for i, node in enumerate(self.node_names):
-            if usd_prices[i] == 0.0:
-                for j, intermediary in enumerate(self.node_names):
-                    if usd_prices[j] == 0.0 or intermediary == node:
-                        continue
-                    # Check node -> intermediary -> USD
-                    if (node, intermediary) in graph.edges and usd_prices[j] > 0:
-                        df = graph.edges[(node, intermediary)]
-                        if len(df) > 0:
-                            price_to_intermediary = float(df['close'].iloc[-1])
-                            usd_prices[i] = price_to_intermediary * usd_prices[j]
-                            break
-                    elif (intermediary, node) in graph.edges and usd_prices[j] > 0:
-                        df = graph.edges[(intermediary, node)]
-                        if len(df) > 0:
-                            price_from_intermediary = float(df['close'].iloc[-1])
-                            usd_prices[i] = usd_prices[j] / price_from_intermediary
-                            break
-        
-        return np.concatenate([heights, usd_prices])
+    def _get_edge_input(self, graph, edge: Tuple[str, str]) -> np.ndarray:
+        return np.array(self._get_fisheye(edge), dtype=np.float32)
 
     def update_prices(self, graph, bar_idx: int):
         if bar_idx < 0:
