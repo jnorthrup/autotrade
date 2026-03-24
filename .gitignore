@@ -1,28 +1,63 @@
 # Environments
 .venv/
+venv/
+env/
 node_modules/
 .env
+.env.*
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+*.egg
+.eggs/
 
-# Data
-candles.duckdb
-candles.duckdb.*
+# Data - ALL OF IT
+*.duckdb
+*.duckdb.*
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.parquet.*
 candle_partitions/
 bag.json
 *.tsv
-results.tsv
+*.csv
+*.json.gz
+*.pkl
+*.pickle
+
+# Models & Weights
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# Logs
+*.log
+logs/
 
 # Binaries & Libraries
 *.dylib
 *.o
 *.a
 *.so
+*.dll
 build/
 dist/
+*.bundle
 
 # System
 .DS_Store
@@ -33,8 +68,12 @@ dist/
 ehthumbs.db
 Thumbs.db
 
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
 # Project
 autotrade.bundle
-velocity_model.pt
-token_bytes.pt
-tokenizer.duckdb
