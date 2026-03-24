@@ -30,13 +30,13 @@ def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
         if bar_idx >= len(graph.common_timestamps):
             break
         
-        edge_accels, edge_velocities = graph.update(bar_idx)
+        edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
         
         if bar_idx >= model.prediction_depth:
             model.predict(graph, bar_idx)
         
         if bar_idx >= model.prediction_depth * 2:
-            loss = model.update(graph, edge_accels, bar_idx, actual_velocities=edge_velocities)
+            loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
             if loss is not None:
                 total_loss += loss
                 n_updates += 1
