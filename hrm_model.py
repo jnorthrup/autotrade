@@ -24,6 +24,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -329,7 +330,13 @@ class HRMEdgePredictor(nn.Module):
 
     def grow_layers(self, level: str = 'H'):
         """
-        Add a new layer to H_level or L_level with rotated weights.
+        Grow layers by 4× using rotational expansion (NOT single layer addition).
+
+        Creates 3 additional rotated copies of each existing layer:
+        - 0°: original (preserved)
+        - 180°: rotated copy
+        - 90°: rotated copy
+        - 270°: rotated copy
 
         Args:
             level: 'H' or 'L' - which reasoning module to deepen
@@ -337,27 +344,32 @@ class HRMEdgePredictor(nn.Module):
         assert level in ('H', 'L')
         old_layers = self.H_layers if level == 'H' else self.L_layers
 
-        new_layer = HRMBlock(self.hidden_size, self.num_heads, self.expansion)
-        src_layer = getattr(self, f'{level}_level').layers[0]
-        src_sd = src_layer.state_dict()
+        module = getattr(self, f'{level}_level')
+        new_layers_list = []
 
-        new_sd = {}
-        for name, param in src_sd.items():
-            if 'weight' in name:
-                new_sd[name] = rotate_180(param)
-            else:
-                new_sd[name] = param
+        for layer in module.layers:
+            src_sd = layer.state_dict()
 
-        new_layer.load_state_dict(new_sd)
+            for rotation, rot_fn in [(0, None), (180, rotate_180), (90, rotate_90), (270, rotate_270)]:
+                new_layer = HRMBlock(self.hidden_size, self.num_heads, self.expansion)
+                if rotation == 0:
+                    new_layer.load_state_dict(src_sd)
+                else:
+                    new_sd = {}
+                    for name, param in src_sd.items():
+                        if 'weight' in name:
+                            new_sd[name] = rot_fn(param)
+                        else:
+                            new_sd[name] = param
+                    new_layer.load_state_dict(new_sd)
+                new_layers_list.append(new_layer)
 
-        layers_list = list(getattr(self, f'{level}_level').layers)
-        layers_list.append(new_layer)
-        getattr(self, f'{level}_level').layers = nn.ModuleList(layers_list)
+        module.layers = nn.ModuleList(new_layers_list)
 
         if level == 'H':
-            self.H_layers = old_layers + 1
+            self.H_layers = old_layers * 4
         else:
-            self.L_layers = old_layers + 1
+            self.L_layers = old_layers * 4
 
     def get_square_cube_size(self) -> int:
         """Return current square cube size (hidden_size is the reference)."""
@@ -366,8 +378,8 @@ class HRMEdgePredictor(nn.Module):
 
 # ── AccelModelHRM wrapper ──────────────────────────────────────────────────────
 
-class AccelModelHRM:
-    """AccelModel interface backed by HRMEdgePredictor."""
+class HierarchicalReasoningModel:
+    """Hierarchical Reasoning Model backed by HRMEdgePredictor."""
     def __init__(
         self,
         n_edges: int = 0,
@@ -375,8 +387,8 @@ class AccelModelHRM:
         y_depth: int = 200,
         x_pixels: int = 20,
         curvature: float = 2.0,
-        h_dim: int = 16,
-        z_dim: int = 8,
+        h_dim: int = 4,
+        z_dim: int = 4,
         prediction_depth: int = 1,
         H_layers: int = 2,
         L_layers: int = 2,
@@ -440,8 +452,6 @@ class AccelModelHRM:
             self._carry[edge] = None
 
     def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
-        import numpy as np
-        from accel_model import fisheye_boundaries, fisheye_sample
         closes = self._close_buffer.get(edge, [])
         if len(closes) < 2:
             return [0.0] * self.x_pixels
@@ -598,4 +608,37 @@ class AccelModelHRM:
 
 # ── Backwards compat ──────────────────────────────────────────────────────────
 
-from accel_model import AccelModel as AccelModelOriginal, fisheye_boundaries, fisheye_sample
+# fisheye functions defined inline above
+def fisheye_boundaries(y_depth: int, x_pixels: int, curvature: float) -> List[int]:
+    """Fisheye bucket boundaries."""
+    if x_pixels <= 1:
+        return [y_depth]
+    boundaries = []
+    prev_boundary = 0
+    for i in range(x_pixels):
+        t = i / (x_pixels - 1)
+        warped = t ** curvature
+        boundary = int(y_depth * warped)
+        boundary = max(boundary, prev_boundary + 1)
+        boundaries.append(boundary)
+        prev_boundary = boundary
+    return boundaries
+
+def fisheye_sample(candles, boundaries: List[int]) -> List[float]:
+    """Sample candles into fisheye buckets."""
+    if len(candles) == 0:
+        return [0.0] * len(boundaries)
+    results = []
+    prev_idx = 0
+    for boundary in boundaries:
+        bucket_start = prev_idx
+        bucket_end = min(boundary, len(candles))
+        if bucket_end <= bucket_start:
+            results.append(0.0)
+        else:
+            bucket_candles = candles[bucket_start:bucket_end]
+            bucket_mean = np.mean(bucket_candles)
+            current_close = candles[-1]
+            results.append((current_close - bucket_mean) / bucket_mean if bucket_mean != 0 else 0.0)
+        prev_idx = boundary
+    return results

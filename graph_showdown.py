@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from accel_model import AccelModel
+from hrm_model import HierarchicalReasoningModel
 from coin_graph import CoinGraph
 from candle_cache import CandleCache
 
@@ -43,7 +43,7 @@ def _is_converged(losses: List[float]) -> bool:
     return True
 
 
-def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
+def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar: int = 0,
                  end_bar: Optional[int] = None, print_every: int = 100,
                  loss_history: Optional[List[float]] = None) -> Tuple[float, int, bool, List[float]]:
     """Train model on graph bars. Returns (total_loss, n_updates, early_stopped, loss_history)."""
@@ -174,21 +174,14 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
 def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
     """
     Autoresearch with Square Cube Progression.
-    
+
     Starts with tiny HRM (hidden_size=4, H_layers=1, L_layers=1).
     Trains until plateau, then grows one dimension by 4× using rotational expansion.
-    
+
     Growth cycle: h -> H -> L -> h (hidden_size leads, then layers catch up)
     Square sizes: 4 -> 16 -> 64 -> 256 (always powers of 4)
     """
-    # Import HRM model
-    try:
-        from hrm_model import AccelModelHRM
-        USE_HRM = True
-        print("Using HRMEdgePredictor for hierarchical reasoning")
-    except ImportError as e:
-        print(f"HRM import failed ({e}), falling back to AccelModel")
-        USE_HRM = False
+    print("Using HRMEdgePredictor for hierarchical reasoning")
 
     conn = duckdb.connect('candles.duckdb')
     
@@ -264,32 +257,20 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
             print(f"  Square: hidden_size={current_h_dim}, H_layers={H_layers}, L_layers={L_layers}")
             print(f"  Bag: {n_pairs} pairs, {window_bars} bars ({window_days}d)")
 
-            if USE_HRM:
-                model = AccelModelHRM(
-                    n_edges=len(trial_graph.edges),
-                    learning_rate=lr,
-                    y_depth=y_depth,
-                    x_pixels=x_pixels,
-                    curvature=curvature,
-                    h_dim=current_h_dim,
-                    z_dim=current_h_dim,  # z follows h for square
-                    prediction_depth=prediction_depth,
-                    H_layers=H_layers,
-                    L_layers=L_layers,
-                    H_cycles=2,
-                    L_cycles=2,
-                )
-            else:
-                model = AccelModel(
-                    n_edges=len(trial_graph.edges),
-                    learning_rate=lr,
-                    y_depth=y_depth,
-                    x_pixels=x_pixels,
-                    curvature=curvature,
-                    h_dim=current_h_dim,
-                    z_dim=current_h_dim,
-                    prediction_depth=prediction_depth
-                )
+            model = HierarchicalReasoningModel(
+                n_edges=len(trial_graph.edges),
+                learning_rate=lr,
+                y_depth=y_depth,
+                x_pixels=x_pixels,
+                curvature=curvature,
+                h_dim=current_h_dim,
+                z_dim=current_h_dim,
+                prediction_depth=prediction_depth,
+                H_layers=H_layers,
+                L_layers=L_layers,
+                H_cycles=2,
+                L_cycles=2,
+            )
             model.register_edges(list(trial_graph.edges.keys()))
 
             # Train with loss history tracking
@@ -410,7 +391,7 @@ def main():
         print("No data. Run fetch_candles.py first.")
         return
 
-    model = AccelModel(
+    model = HierarchicalReasoningModel(
         n_edges=len(graph.edges),
         learning_rate=args.lr,
         y_depth=args.y_depth,
