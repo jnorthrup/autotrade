@@ -440,6 +440,7 @@ class AccelModelHRM:
             self._carry[edge] = None
 
     def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
+        import numpy as np
         from accel_model import fisheye_boundaries, fisheye_sample
         closes = self._close_buffer.get(edge, [])
         if len(closes) < 2:
@@ -474,7 +475,7 @@ class AccelModelHRM:
         predictions = {}
         with torch.no_grad():
             for edge in self.edge_names:
-                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32)
+                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32).unsqueeze(0)  # (1, x_pixels)
                 fraction, ptt, stop, carry = self._model(fisheye, self._carry.get(edge))
                 f, p, s = float(fraction), float(ptt), float(stop)
                 predictions[edge] = (f, p, s)
@@ -518,7 +519,7 @@ class AccelModelHRM:
             else:
                 frac_target = 0.5
 
-            fisheye = torch.tensor(frame['fisheye'], dtype=torch.float32)
+            fisheye = torch.tensor(frame['fisheye'], dtype=torch.float32).unsqueeze(0)  # (1, x_pixels)
             pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye)
 
             frac_loss = F.binary_cross_entropy(pred_frac, torch.tensor([frac_target]))
