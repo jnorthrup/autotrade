@@ -22,9 +22,16 @@ def rotate_half(x: torch.Tensor):
 
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+    """Apply rotary position embeddings, slicing to match seq_len."""
     orig_dtype = q.dtype
     q = q.to(torch.float32)
     k = k.to(torch.float32)
+    
+    # Slice cos/sin to match query/key seq_len
+    seq_len = q.shape[1]
+    cos = cos[:seq_len]
+    sin = sin[:seq_len]
+    
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
@@ -107,18 +114,27 @@ class Attention(nn.Module):
             cos, sin = cos_sin
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
-        # Attention (manual, no flash)
+        # Attention
         if self.num_key_value_heads != self.num_heads:
             n_rep = self.num_heads // self.num_key_value_heads
             key = key.repeat_interleave(n_rep, dim=2)
             value = value.repeat_interleave(n_rep, dim=2)
 
-        attn_weights = torch.einsum('bqhd,bkhd->bhqk', query, key) / math.sqrt(self.head_dim)
+        # Transpose for attention: [bs, nh, sq, hd]
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        
         if self.causal:
-            attn_weights = attn_weights.masked_fill(torch.triu(torch.ones(seq_len, seq_len, device=attn_weights.device), diagonal=1).bool(), float('-inf'))
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn_weights.device), diagonal=1).bool()
+            attn_weights = attn_weights.masked_fill(causal_mask, float('-inf'))
+        
         attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_output = torch.einsum('bhqk,bkhd->bqhd', attn_weights, value)
-        attn_output = attn_output.reshape(batch_size, seq_len, self.num_heads * self.head_dim)
+        attn_output = torch.matmul(attn_weights, value)  # [bs, nh, sq, hd]
+        attn_output = attn_output.transpose(1, 2).contiguous()  # [bs, sq, nh, hd]
+        attn_output = attn_output.view(batch_size, seq_len, -1)  # [bs, sq, nh*hd]
 
         return self.o_proj(attn_output)
 
