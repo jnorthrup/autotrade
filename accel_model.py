@@ -247,7 +247,7 @@ class AccelModel:
             loss = total_loss / n_scored
             loss.backward()
             self._optimizer.step()
-            return float(loss)
+            return loss.item()
         return 0.0
 
     def high_level_plan(self, graph) -> Dict[str, str]:

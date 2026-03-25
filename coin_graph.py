@@ -57,26 +57,49 @@ class CoinGraph:
                 pairs = []
 
         if not pairs:
-            resp = self.cache.client.get_public_products()
-            adjacency = {}
-            real_products = set()
-            for p in resp.products:
-                if p.status != "online" or p.trading_disabled:
-                    continue
-                parts = p.product_id.split("-", 1)
-                if len(parts) != 2:
-                    continue
-                base, quote = parts
-                real_products.add(p.product_id)
-                adjacency.setdefault(base, set()).add(quote)
-                adjacency.setdefault(quote, set()).add(base)
+            if exchange == "binance":
+                real_products = set()
+                adjacency = {}
+                try:
+                    import duckdb
+                    with duckdb.connect(db_path, read_only=True) as conn:
+                        rows = conn.execute("SELECT DISTINCT product_id FROM candles").fetchall()
+                        for r in rows:
+                            pid = r[0]
+                            parts = pid.split("-", 1)
+                            if len(parts) != 2:
+                                continue
+                            base, quote = parts
+                            real_products.add(pid)
+                            adjacency.setdefault(base, set()).add(quote)
+                            adjacency.setdefault(quote, set()).add(base)
+                except Exception as e:
+                    print(f"Error reading products from DuckDB: {e}")
+                    real_products = set()
+                    adjacency = {}
+            else:
+                resp = self.cache.client.get_public_products()
+                adjacency = {}
+                real_products = set()
+                for p in resp.products:
+                    if p.status != "online" or p.trading_disabled:
+                        continue
+                    parts = p.product_id.split("-", 1)
+                    if len(parts) != 2:
+                        continue
+                    base, quote = parts
+                    real_products.add(p.product_id)
+                    adjacency.setdefault(base, set()).add(quote)
+                    adjacency.setdefault(quote, set()).add(base)
 
             coin_set = {
                 c for c, partners in adjacency.items() 
                 if len(partners) >= min_partners and (max_partners is None or len(partners) <= max_partners)
             }
 
-            FIAT_EXCLUDE = {"GBP", "EUR"}
+            FIAT_EXCLUDE = {"GBP", "EUR", "SGD"}
+            if exchange == "binance":
+                FIAT_EXCLUDE = {"GBP", "EUR", "SGD"}
             usd_bases = {p.split("-")[0] for p in real_products if p.endswith("-USD")}
 
             seen = set()
@@ -134,17 +157,16 @@ class CoinGraph:
             df = df.set_index('timestamp')
             self.nodes.add(base)
             self.nodes.add(quote)
-        
-        # Ensure USD is countercoin-0 (ground truth for PnL scoring)
-        if "USD" in self.nodes:
-            self.nodes.discard("USD")
-            self.nodes = {"USD"} | self.nodes
             self.edges[(base, quote)] = df
             self.edges[(quote, base)] = df
             self.edge_state[(base, quote)] = EdgeState()
             self.edge_state[(quote, base)] = EdgeState()
             self.node_state.setdefault(base, NodeState())
             self.node_state.setdefault(quote, NodeState())
+        
+        if "USD" in self.nodes:
+            self.nodes.discard("USD")
+            self.nodes = {"USD"} | self.nodes
 
         self._align_timestamps()
         return len(self.common_timestamps)
@@ -152,8 +174,10 @@ class CoinGraph:
     def _align_timestamps(self):
         if not self.edges:
             return
-        all_indices = [df.index for df in self.edges.values()]
-        common = set(all_indices[0])
+        all_indices = [set(df.index) for df in self.edges.values()]
+        if not all_indices:
+            return
+        common = all_indices[0]
         for idx in all_indices[1:]:
             common = common.union(idx)
         self.common_timestamps = sorted(list(common))

@@ -259,6 +259,39 @@ class CandleCache:
 
         return True
 
+    def list_binance_pairs(self) -> List[str]:
+        """
+        Fetch all TRADING pairs from Binance exchangeInfo API.
+        Returns raw product_ids in BASE-QUOTE format (e.g., BTC-USDT, ETH-BTC).
+        Filters out fiat quotes and UP/DOWN/BULL/BEAR mutations only.
+        """
+        import requests as req
+        
+        FIAT_QUOTES = {'TRY', 'EUR', 'IDR', 'JPY', 'BRL', 'MXN', 'PLN', 'ARS', 'EURI', 'ZAR', 'UAH', 'COP', 'RUB', 'NGN'}
+        
+        resp = req.get("https://data-api.binance.vision/api/v3/exchangeInfo", timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        pairs = []
+        for sym in data.get("symbols", []):
+            if sym.get("status") != "TRADING":
+                continue
+            base = sym.get("baseAsset", "")
+            quote = sym.get("quoteAsset", "")
+            if not base or not quote:
+                continue
+            
+            if any(x in base or x in quote for x in ['UP', 'DOWN', 'BULL', 'BEAR']):
+                continue
+            
+            if quote in FIAT_QUOTES:
+                continue
+            
+            pairs.append(f"{base}-{quote}")
+        
+        return sorted(set(pairs))
+
     def import_binance_archive(self, pairs: List[str], granularity: str = "300") -> List[str]:
         """
         Draw-through: given a bag of pairs, fetch what is missing from disk for the

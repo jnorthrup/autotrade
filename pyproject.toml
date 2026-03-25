@@ -1,7 +1,7 @@
 [project]
 name = "autotrade"
 version = "0.1.0"
-description = "GAT-based force-directed coin graph trading with HRM reasoning"
+description = "Coin graph trading with hierarchical reasoning model"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

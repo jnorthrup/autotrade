@@ -22,15 +22,27 @@ def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
     
+    ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
+    bars_with_data = set()
+    for df in graph.edges.values():
+        common_ts = set(df.index) & ts_to_bar.keys()
+        bars_with_data.update(ts_to_bar[ts] for ts in common_ts)
+    
     total_loss = 0.0
     n_updates = 0
     early_stopped = False
     
-    for bar_idx in range(start_bar, end_bar):
+    sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
+    print(f"Training on {len(sorted_bars)} bars with data")
+    
+    for i, bar_idx in enumerate(sorted_bars):
         if bar_idx >= len(graph.common_timestamps):
             break
         
         edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
+        
+        if not edge_accels:
+            continue
         
         if bar_idx >= model.prediction_depth:
             model.predict(graph, bar_idx)
@@ -41,7 +53,7 @@ def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
                 total_loss += loss
                 n_updates += 1
         
-        if bar_idx % print_every == 0 and bar_idx > 0:
+        if i % print_every == 0 and i > 0:
             avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
             print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
     
@@ -117,11 +129,11 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
         for edge in [(base, quote), (quote, base)]:
             if edge in full_graph.edges:
                 trial.edges[edge] = full_graph.edges[edge]
-                trial.edge_state[edge] = EdgeState(base=base, quote=quote)
+                trial.edge_state[edge] = EdgeState()
         trial.nodes.add(base)
         trial.nodes.add(quote)
-        trial.node_state.setdefault(base, NodeState(currency=base))
-        trial.node_state.setdefault(quote, NodeState(currency=quote))
+        trial.node_state.setdefault(base, NodeState())
+        trial.node_state.setdefault(quote, NodeState())
 
     trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
     return trial
