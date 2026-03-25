@@ -60,6 +60,19 @@ class HRMState:
     low_level_accuracy: float = 0.0
 
 
+def _rotate_90(W: torch.Tensor) -> torch.Tensor:
+    """90° counter-clockwise rotation in weight space."""
+    return torch.rot90(W, k=1, dims=(-2, -1))
+
+def _rotate_180(W: torch.Tensor) -> torch.Tensor:
+    """180° rotation."""
+    return torch.rot90(W, k=2, dims=(-2, -1))
+
+def _rotate_270(W: torch.Tensor) -> torch.Tensor:
+    """270° rotation (90° clockwise)."""
+    return torch.rot90(W, k=3, dims=(-2, -1))
+
+
 class EdgeModel(nn.Module):
     """Per-edge prediction from fisheye.
     
@@ -298,3 +311,64 @@ class AccelModel:
         state = torch.load(path, weights_only=True)
         if self._model is not None and 'model' in state:
             self._model.load_state_dict(state['model'])
+
+    def grow(self, dim: str):
+        """Grow one dimension by 4× using rotational expansion.
+        
+        Quadrant layout:
+          ┌────────┬────────┐
+          │  0°    │ 180°   │
+          ├────────┼────────┤
+          │  90°   │ 270°   │
+          └────────┴────────┘
+        0° is always top-left, always preserved.
+        """
+        if self._model is None:
+            return
+
+        sd = self._model.state_dict()
+        W1 = sd['encoder.0.weight']  # (h_dim, x_pixels)
+        W2 = sd['encoder.2.weight']  # (z_dim, h_dim)
+        W1b = sd['encoder.0.bias']   # (h_dim,)
+        W2b = sd['encoder.2.bias']   # (z_dim,)
+
+        if dim == 'z':
+            # z leads: W2 columns grow (z, h) → (z, 4h)
+            # W1 stays, h_dim unchanged
+            sd['encoder.2.weight'] = torch.cat([
+                W2,              # 0° preserved
+                _rotate_180(W2), # 180°
+                _rotate_90(W2),  # 90°
+                _rotate_270(W2), # 270°
+            ], dim=0)  # cat along rows = output dim (z)
+            sd['encoder.2.bias'] = W2b.repeat(4)
+            self.z_dim = self.z_dim * 4
+
+        elif dim == 'h':
+            # h catches up: W1 rows grow (h, x_p) → (4h, x_p)
+            # W2 rows must grow (z, h) → (z, 4h)
+            sd['encoder.0.weight'] = torch.cat([
+                W1,              # 0° preserved
+                _rotate_180(W1), # 180°
+                _rotate_90(W1),  # 90°
+                _rotate_270(W1), # 270°
+            ], dim=0)  # cat along rows = output dim (h)
+            sd['encoder.0.bias'] = W1b.repeat(4)
+
+            # W2 rows grow: split into quadrants, rotate each
+            h = W2.shape[1] // 4  # original h per quadrant
+            quads = W2.split(h, dim=1)
+            sd['encoder.2.weight'] = torch.cat([
+                torch.cat([quads[0], _rotate_180(quads[1])], dim=1),
+                torch.cat([_rotate_90(quads[2]), _rotate_270(quads[3])], dim=1),
+            ], dim=0)
+            self.h_dim = self.h_dim * 4
+
+        # Reinitialize output heads for new z_dim
+        for head_name in ['fraction_head.weight', 'fraction_head.bias',
+                          'ptt_head.weight', 'ptt_head.bias',
+                          'stop_head.weight', 'stop_head.bias']:
+            sd[head_name] = torch.zeros_like(sd[head_name]) if head_name.endswith('bias') else torch.zeros_like(sd[head_name])
+
+        self._model.load_state_dict(sd)
+        self._optimizer = optim.Adam(self._model.parameters(), lr=self._lr)

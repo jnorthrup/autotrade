@@ -16,11 +16,42 @@ from candle_cache import CandleCache
 
 import duckdb
 
+# Square cube progression: hidden_size, always powers of 4
+SQUARE_CUBE_SIZES = [4, 16, 64, 256]
+PLATEAU_WINDOW = 100
+PLATEAU_THRESHOLD = 1e-5
+PLATEAU_PATIENCE = 3
+
+# Growth cycle for square cube: which dimension leads next
+# Cycle: h (hidden_size leads) -> H (H_layers catches up) -> L (L_layers catches up) -> h (cubed, cycle repeats)
+GROWTH_CYCLE = ['h', 'H', 'L']
+
+
+def _is_converged(losses: List[float]) -> bool:
+    """Sustained plateau detection across PATIENCE windows."""
+    n = len(losses)
+    if n < PLATEAU_WINDOW * PLATEAU_PATIENCE:
+        return False
+    for i in range(PLATEAU_PATIENCE):
+        chunk = losses[-PLATEAU_WINDOW * (PLATEAU_PATIENCE - i):]
+        if len(chunk) < PLATEAU_WINDOW:
+            continue
+        recent = np.mean(chunk[-PLATEAU_WINDOW:])
+        older = np.mean(chunk[:PLATEAU_WINDOW])
+        if abs(recent - older) > PLATEAU_THRESHOLD:
+            return False
+    return True
+
 
 def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
-                 end_bar: Optional[int] = None, print_every: int = 100) -> Tuple[float, int, bool]:
+                 end_bar: Optional[int] = None, print_every: int = 100,
+                 loss_history: Optional[List[float]] = None) -> Tuple[float, int, bool, List[float]]:
+    """Train model on graph bars. Returns (total_loss, n_updates, early_stopped, loss_history)."""
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
+    
+    if loss_history is None:
+        loss_history = []
     
     ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
     bars_with_data = set()
@@ -52,12 +83,13 @@ def run_training(graph: CoinGraph, model: AccelModel, start_bar: int = 0,
             if loss is not None:
                 total_loss += loss
                 n_updates += 1
+                loss_history.append(loss)
         
         if i % print_every == 0 and i > 0:
             avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
             print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
     
-    return total_loss, n_updates, early_stopped
+    return total_loss, n_updates, early_stopped, loss_history
 
 
 def _build_pair_adjacency(all_pairs: List[str]) -> Dict[str, List[str]]:
@@ -140,6 +172,24 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
 
 
 def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
+    """
+    Autoresearch with Square Cube Progression.
+    
+    Starts with tiny HRM (hidden_size=4, H_layers=1, L_layers=1).
+    Trains until plateau, then grows one dimension by 4× using rotational expansion.
+    
+    Growth cycle: h -> H -> L -> h (hidden_size leads, then layers catch up)
+    Square sizes: 4 -> 16 -> 64 -> 256 (always powers of 4)
+    """
+    # Import HRM model
+    try:
+        from hrm_model import AccelModelHRM
+        USE_HRM = True
+        print("Using HRMEdgePredictor for hierarchical reasoning")
+    except ImportError as e:
+        print(f"HRM import failed ({e}), falling back to AccelModel")
+        USE_HRM = False
+
     conn = duckdb.connect('candles.duckdb')
     
     conn.execute("""
@@ -147,7 +197,8 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
             timestamp TIMESTAMP DEFAULT now(),
             val_bpb DOUBLE,
             params VARCHAR,
-            bag_spec VARCHAR
+            bag_spec VARCHAR,
+            growth_phase VARCHAR
         )
     """)
 
@@ -164,16 +215,25 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
     MIN_WINDOW_BARS = max(200, total_bars // 20)
     MAX_WINDOW_BARS = total_bars
 
-    trial = 0
+    # Square cube state
+    growth_idx = 0  # index into GROWTH_CYCLE
+    hidden_size = SQUARE_CUBE_SIZES[0]  # start at 4
+    H_layers = 1
+    L_layers = 1
+    current_h_dim = hidden_size
+    phase = 0
+
     print(f"\nAutoresearch: {total_pairs} pairs, {total_bars} bars")
+    print(f"Square Cube: hidden_size={hidden_size}, H_layers={H_layers}, L_layers={L_layers}")
     print(f"Curriculum: pairs [{MIN_PAIRS}..{MAX_PAIRS}], window [{MIN_WINDOW_BARS}..{MAX_WINDOW_BARS}]")
     print("Press Ctrl+C to stop.\n")
 
     try:
         while True:
-            trial += 1
-            progress = min(1.0, trial / 200.0)
+            phase += 1
+            progress = min(1.0, phase / 200.0)
 
+            # Bag progression (unchanged)
             pair_ceil = int(MIN_PAIRS + (MAX_PAIRS - MIN_PAIRS) * progress)
             n_pairs = rng.randint(MIN_PAIRS, max(MIN_PAIRS, pair_ceil))
             selected_pairs = _select_related_pairs(graph.all_pairs, adj, n_pairs, rng)
@@ -191,45 +251,51 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
 
             trial_graph = _make_trial_graph(graph, selected_pairs, start_bar, end_bar)
             if not trial_graph.edges:
-                print(f"Trial {trial}: empty graph, skipping")
+                print(f"Phase {phase}: empty graph, skipping")
                 continue
 
             lr = 10 ** random.uniform(-4, -1.5)
-            h_dim = random.choice([8, 16, 32])
-            z_dim = random.choice([4, 8, 16])
             y_depth = random.choice([100, 200, 300, 400])
             x_pixels = random.choice([10, 15, 20, 30])
             curvature = random.uniform(0.5, 4.0)
             prediction_depth = random.choice([1, 2, 3, 5, 10])
 
-            params = {
-                'lr': lr, 'h_dim': h_dim, 'z_dim': z_dim,
-                'y_depth': y_depth, 'x_pixels': x_pixels,
-                'curvature': curvature, 'prediction_depth': prediction_depth
-            }
-            bag_spec = {
-                'n_pairs': n_pairs, 'window_bars': window_bars,
-                'window_days': window_days, 'start_bar': start_bar
-            }
-
-            print(f"\n--- Trial {trial} (p={progress:.2f}) ---")
+            print(f"\n=== Phase {phase} (p={progress:.2f}) ===")
+            print(f"  Square: hidden_size={current_h_dim}, H_layers={H_layers}, L_layers={L_layers}")
             print(f"  Bag: {n_pairs} pairs, {window_bars} bars ({window_days}d)")
-            print(f"  depth={prediction_depth}, z_dim={z_dim}, h_dim={h_dim}, lr={lr:.5f}")
 
-            model = AccelModel(
-                n_edges=len(trial_graph.edges),
-                learning_rate=lr,
-                y_depth=y_depth,
-                x_pixels=x_pixels,
-                curvature=curvature,
-                h_dim=h_dim,
-                z_dim=z_dim,
-                prediction_depth=prediction_depth
-            )
+            if USE_HRM:
+                model = AccelModelHRM(
+                    n_edges=len(trial_graph.edges),
+                    learning_rate=lr,
+                    y_depth=y_depth,
+                    x_pixels=x_pixels,
+                    curvature=curvature,
+                    h_dim=current_h_dim,
+                    z_dim=current_h_dim,  # z follows h for square
+                    prediction_depth=prediction_depth,
+                    H_layers=H_layers,
+                    L_layers=L_layers,
+                    H_cycles=2,
+                    L_cycles=2,
+                )
+            else:
+                model = AccelModel(
+                    n_edges=len(trial_graph.edges),
+                    learning_rate=lr,
+                    y_depth=y_depth,
+                    x_pixels=x_pixels,
+                    curvature=curvature,
+                    h_dim=current_h_dim,
+                    z_dim=current_h_dim,
+                    prediction_depth=prediction_depth
+                )
             model.register_edges(list(trial_graph.edges.keys()))
 
-            total_loss, n_updates, _ = run_training(
-                trial_graph, model, print_every=1000
+            # Train with loss history tracking
+            loss_history = []
+            total_loss, n_updates, _, loss_history = run_training(
+                trial_graph, model, print_every=1000, loss_history=loss_history
             )
 
             if n_updates > 0:
@@ -237,17 +303,70 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
             else:
                 val_bpb = 999.0
 
+            growth_dim = GROWTH_CYCLE[growth_idx]
+            print(f"  val_bpb={val_bpb:.6f} (Best: {best_bpb:.6f})")
+
             if val_bpb < best_bpb:
                 best_bpb = val_bpb
-                best_params = {**params, **bag_spec}
+                params = {
+                    'lr': lr, 'h_dim': current_h_dim,
+                    'y_depth': y_depth, 'x_pixels': x_pixels,
+                    'curvature': curvature, 'prediction_depth': prediction_depth,
+                    'H_layers': H_layers, 'L_layers': L_layers,
+                }
+                bag_spec = {
+                    'n_pairs': n_pairs, 'window_bars': window_bars,
+                    'window_days': window_days, 'start_bar': start_bar
+                }
+                best_params = {**params, **bag_spec, 'growth_phase': f'{growth_dim}'}
                 print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
-            else:
-                print(f"  val_bpb: {val_bpb:.6f} (Best: {best_bpb:.6f})")
+                model.save("model_weights.pt")
 
             conn.execute(
-                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec) VALUES (now(), ?, ?, ?)",
-                [val_bpb, str(params), str(bag_spec)]
+                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase) VALUES (now(), ?, ?, ?, ?)",
+                [val_bpb, str(params), str(bag_spec), growth_dim]
             )
+
+            # Check for convergence and trigger growth
+            if _is_converged(loss_history):
+                old_h = current_h_dim
+                old_H = H_layers
+                old_L = L_layers
+
+                # Grow next dimension in cycle
+                if growth_dim == 'h':
+                    # hidden_size leads: find next size
+                    if hidden_size in SQUARE_CUBE_SIZES:
+                        idx = SQUARE_CUBE_SIZES.index(hidden_size)
+                        if idx + 1 < len(SQUARE_CUBE_SIZES):
+                            hidden_size = SQUARE_CUBE_SIZES[idx + 1]
+                            current_h_dim = hidden_size
+                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                        else:
+                            # Max size reached, just rotate layers
+                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                    else:
+                        # Interpolate: grow to next power of 4
+                        hidden_size = hidden_size * 4
+                        current_h_dim = hidden_size
+                        growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                    model.grow('h')
+                elif growth_dim == 'H':
+                    H_layers = H_layers * 2 if H_layers < 8 else H_layers + 1
+                    model.grow('H')
+                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                elif growth_dim == 'L':
+                    L_layers = L_layers * 2 if L_layers < 8 else L_layers + 1
+                    model.grow('L')
+                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+
+                print(f"\n  *** CONVERGED -> GROWTH: {growth_dim} {old_h}x{old_h}x{old_h} -> {current_h_dim}x{current_h_dim}x{current_h_dim} [H={H_layers}, L={L_layers}]")
+                
+                # Save grown model state for next phase
+                model.save("model_weights_grown.pt")
+            else:
+                # Not converged, shuffle growth index to try different dimension
+                growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -307,14 +426,16 @@ def main():
     if args.autoresearch:
         run_autoresearch(graph)
     else:
+        loss_history = []
         end_bar = args.end_bar if args.end_bar else min(n_bars, 10000)
         print(f"Training from bar {args.start_bar} to {end_bar}...")
         
-        total_loss, n_updates, _ = run_training(
+        total_loss, n_updates, _, loss_history = run_training(
             graph, model,
             start_bar=args.start_bar,
             end_bar=end_bar,
-            print_every=args.print_every
+            print_every=args.print_every,
+            loss_history=loss_history
         )
         
         avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
