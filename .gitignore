@@ -78,6 +78,13 @@ Thumbs.db
 # Project
 autotrade.bundle
 
+# Swift
+.build/
+.swift-build/
+*.swiftraw
+*.swiftmodule
+Package.resolved
+
 # Build artifacts
 test_*
 ane_hrm_train
