@@ -77,3 +77,23 @@ Thumbs.db
 
 # Project
 autotrade.bundle
+
+# Build artifacts
+test_*
+ane_hrm_train
+*.m~
+
+# External dependencies
+external/
+
+# Temporary documentation
+*_SUMMARY.md
+*_ANALYSIS.md
+*_PLAN.md
+COMPLETE_*.md
+ANE_*.md
+FINAL_*.md
+
+# Generated headers
+ane_matmul_*.h
+hrm_*.h
