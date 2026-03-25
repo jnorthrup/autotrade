@@ -136,14 +136,14 @@ class ANETrainer:
         if not self.training_dir.exists():
             raise FileNotFoundError(f"ANE training directory not found: {self.training_dir}")
 
-        # Training binary
-        self.train_binary = self.training_dir / "train_large"
+        # Training binary - use ane_hrm_train for HRM
+        self.train_binary = Path("ane_hrm_train")
         if not self.train_binary.exists():
             raise FileNotFoundError(f"Training binary not found: {self.train_binary}")
 
         # Checkpoint paths
-        self.ckpt_path = self.training_dir / "hrm_ckpt.bin"
-        self.updated_ckpt = self.training_dir / "hrm_ckpt_updated.bin"
+        self.ckpt_path = Path("hrm_ckpt.bin")
+        self.updated_ckpt = Path("hrm_ckpt_updated.bin")
 
     def export_weights(self, path: Optional[str] = None):
         """Export HRM weights to ANE checkpoint format."""
@@ -186,9 +186,9 @@ class ANETrainer:
 
         Args:
             steps: Number of training steps
-            batch_size: Batch size
+            batch_size: Batch size (not currently used by ane_hrm_train)
             learning_rate: Learning rate
-            checkpoint_interval: Save checkpoint every N steps
+            checkpoint_interval: Save checkpoint every N steps (not currently used)
 
         Returns:
             Final loss value
@@ -196,15 +196,13 @@ class ANETrainer:
         # Export current weights
         self.export_weights()
 
-        # Build command
+        # Build command for ane_hrm_train
         cmd = [
             str(self.train_binary),
-            f"--checkpoint={self.ckpt_path}",
+            f"--ckpt={self.ckpt_path}",
             f"--output={self.updated_ckpt}",
             f"--steps={steps}",
-            f"--batch_size={batch_size}",
             f"--lr={learning_rate}",
-            f"--save_every={checkpoint_interval}",
         ]
 
         print(f"Launching ANE training: {' '.join(cmd)}")
@@ -212,7 +210,6 @@ class ANETrainer:
         # Run training
         process = subprocess.Popen(
             cmd,
-            cwd=str(self.training_dir),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
