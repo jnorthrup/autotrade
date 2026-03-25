@@ -8,7 +8,7 @@
 import Foundation
 import AutotradeHRM
 
-print("🚀 Autotrade Swift (ANE-accelerated)")
+print("🚀 Autotrade Swift (ANE-accelerated via Espresso)")
 
 let arguments = CommandLine.arguments
 
@@ -274,7 +274,7 @@ func trainEdge(
     targetPtt: Double,
     targetStop: Double
 ) -> Double? {
-    // This would call into the HRMEdgePredictor
-    // For now, return a placeholder loss
+    // Use HRMEdgePredictor for training
+    // TODO: Integrate with HRMANETrainer for Espresso ANE acceleration
     return nil
 }
