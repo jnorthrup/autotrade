@@ -1,33 +1,33 @@
-// swift-tools-version: 6.2
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "Autotrade",
     platforms: [.macOS(.v15)],
+    products: [
+        .executable(name: "Autotrade", targets: ["Autotrade"]),
+        .library(name: "AutotradeHRM", targets: ["AutotradeHRM"])
+    ],
     dependencies: [
-        // Add Espresso as a local dependency
-        // .Package(url: "https://github.com/jnorthrup/Espresso", from: "1.0.0")
+        .package(url: "https://github.com/duckdb/duckdb-swift", .upToNextMajor(from: .init(1, 0, 0)))
     ],
     targets: [
-        .target(
+        .executableTarget(
             name: "Autotrade",
-            dependencies: ["AutotradeHRM"]
+            dependencies: ["AutotradeHRM"],
+            path: "Sources/Autotrade"
         ),
         .target(
             name: "AutotradeHRM",
-            dependencies: [],
+            dependencies: [
+                .product(name: "DuckDB", package: "duckdb-swift")
+            ],
             path: "Sources/AutotradeHRM"
         ),
         .testTarget(
             name: "AutotradeTests",
-            dependencies: ["Autotrade"]
-        ),
-        .executableTarget(
-            name: "autotrade",
-            dependencies: ["Autotrade"],
-            path: "Sources/autotrade"
-        ),
+            dependencies: ["AutotradeHRM"],
+            path: "Tests/AutotradeTests"
+        )
     ]
 )
