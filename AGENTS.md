@@ -44,6 +44,61 @@ If `model_weights.pt` fails to load due to dimension mismatch:
 
 Before committing changes:
 ```bash
-python -c "from accel_model import EdgeModel; m = EdgeModel(20); print(f'h={m.h_dim}, z={m.z_dim}')"
+python -c "from hrm_model import HierarchicalReasoningModel; m = HierarchicalReasoningModel(); print(f'h={m.h_dim}, z={m.z_dim}')"
 # Should print: h=4, z=4 (or both 16, both 64, etc. — ALWAYS equal)
 ```
+
+## ANE TRAINING INTEGRATION
+
+**ANE = Apple Neural Engine** — dedicated 15.8 TFLOPS inference accelerator on M4/M3 chips
+
+### OVERVIEW
+
+The project includes ANE training support via reverse-engineered private APIs in `./ANE/training/`. This allows training transformer models directly on ANE hardware with ~9ms/step throughput for dim=768 models.
+
+### FILES
+
+- `ane_training.py` — Python interface for ANE training (export/import checkpoints)
+- `ane_hrm_train.m` — Objective-C wrapper for HRM-specific ANE training
+- `Makefile` — Build configuration for ANE HRM trainer
+- `./ANE/training/` — Low-level ANE runtime, MIL generators, training loops
+
+### BUILDING ANE TRAINER
+
+```bash
+make ane_hrm_train
+```
+
+### USING ANE TRAINING
+
+```python
+from ane_training import ANETrainer
+from hrm_model import HierarchicalReasoningModel
+
+model = HierarchicalReasoningModel()
+model.register_edges(edges)
+
+trainer = ANETrainer(model)
+loss = trainer.train(steps=1000, batch_size=32, learning_rate=0.001)
+```
+
+### ANE TRAINING ARCHITECTURE
+
+The ANE system uses 6 kernels per training step:
+1. `kFwdAttn` — Forward attention (QKV + SDPA + output)
+2. `kFwdFFN` — Forward FFN (SwiGLU)
+3. `kFFNBwd` — FFN backward
+4. `kSdpaBwd1` — SDPA backward part 1
+5. `kSdpaBwd2` — SDPA backward part 2
+6. `kQKVb` — QKV backward
+
+See `./ANE/README.md` for complete details on ANE training implementation.
+
+### CHECKPOINT FORMAT
+
+ANE training uses custom binary checkpoint format (`ANECheckpointFormat`):
+- Header: Magic + version + param count
+- Per param: Name + shape + dtype + data
+
+This bridges PyTorch state_dicts with ANE training code.
+

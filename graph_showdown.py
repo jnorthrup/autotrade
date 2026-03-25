@@ -13,6 +13,7 @@ import pandas as pd
 from hrm_model import HierarchicalReasoningModel
 from coin_graph import CoinGraph
 from candle_cache import CandleCache
+from ane_trainer import enable_ane_training
 
 import duckdb
 
