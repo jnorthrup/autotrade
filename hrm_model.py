@@ -228,13 +228,12 @@ class HRMEdgePredictor(nn.Module):
 
         cos_sin = self.rotary_emb()
 
-        with torch.no_grad():
-            z_H, z_L = carry.z_H, carry.z_L
+        z_H, z_L = carry.z_H, carry.z_L
 
-            for _ in range(self.H_cycles):
-                for _ in range(self.L_cycles):
-                    z_L = self.L_level(z_L, z_H + input_emb, cos_sin)
-                z_H = self.H_level(z_H, z_L, cos_sin)
+        for _ in range(self.H_cycles):
+            for _ in range(self.L_cycles):
+                z_L = self.L_level(z_L, z_H + input_emb, cos_sin)
+            z_H = self.H_level(z_H, z_L, cos_sin)
 
         # Use final H-level representation for prediction
         z = z_H.squeeze(1)  # (batch, hidden_size)
