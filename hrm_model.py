@@ -416,6 +416,74 @@ class HierarchicalReasoningModel:
         self._prediction_queue: Dict[Tuple[str, str], List] = {}
         self._carry: Dict[Tuple[str, str], HRMEdgeCarry] = {}
 
+    def _reset_edge_runtime_state(self):
+        self._prediction_queue = {}
+        self._carry = {}
+        for edge in self.edge_names:
+            self._prediction_queue[edge] = []
+            self._carry[edge] = None
+
+    def _build_model(self):
+        self._model = HRMEdgePredictor(
+            x_pixels=self.x_pixels,
+            hidden_size=self.h_dim,
+            num_heads=max(1, self.h_dim // 64),
+            H_layers=self.H_layers,
+            L_layers=self.L_layers,
+            H_cycles=self.H_cycles,
+            L_cycles=self.L_cycles,
+        )
+        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+        self._max_history = max(self.y_depth + 100, 500)
+        self._reset_edge_runtime_state()
+
+    @staticmethod
+    def _count_layers(state_dict: Dict[str, Tensor], prefix: str) -> int:
+        token = f"{prefix}.layers."
+        layer_indices = set()
+        for name in state_dict:
+            if not name.startswith(token):
+                continue
+            remainder = name[len(token):]
+            layer_idx, _, _ = remainder.partition(".")
+            if layer_idx.isdigit():
+                layer_indices.add(int(layer_idx))
+        return (max(layer_indices) + 1) if layer_indices else 0
+
+    @classmethod
+    def _checkpoint_config(cls, state: Dict) -> Dict[str, float]:
+        model_state = state.get('model', {}) if isinstance(state, dict) else {}
+
+        h_dim = state.get('h_dim')
+        if h_dim is None and 'H_init' in model_state:
+            h_dim = int(model_state['H_init'].shape[0])
+
+        z_dim = state.get('z_dim', h_dim)
+
+        x_pixels = state.get('x_pixels')
+        if x_pixels is None and 'embed.proj.weight' in model_state:
+            x_pixels = int(model_state['embed.proj.weight'].shape[1])
+
+        return {
+            'x_pixels': int(x_pixels) if x_pixels is not None else None,
+            'y_depth': int(state['y_depth']) if 'y_depth' in state else None,
+            'curvature': float(state['curvature']) if 'curvature' in state else None,
+            'h_dim': int(h_dim) if h_dim is not None else None,
+            'z_dim': int(z_dim) if z_dim is not None else None,
+            'prediction_depth': int(state['prediction_depth']) if 'prediction_depth' in state else None,
+            'H_layers': int(state['H_layers']) if 'H_layers' in state else cls._count_layers(model_state, 'H_level'),
+            'L_layers': int(state['L_layers']) if 'L_layers' in state else cls._count_layers(model_state, 'L_level'),
+            'H_cycles': int(state['H_cycles']) if 'H_cycles' in state else None,
+            'L_cycles': int(state['L_cycles']) if 'L_cycles' in state else None,
+        }
+
+    def _apply_checkpoint_config(self, state: Dict):
+        for key, value in self._checkpoint_config(state).items():
+            if value is None:
+                continue
+            setattr(self, key, value)
+        self._max_history = max(self.y_depth + 100, 500)
+
     def register_edges(self, edges: List[Tuple[str, str]]):
         self.edge_names = edges
 
@@ -431,21 +499,7 @@ class HierarchicalReasoningModel:
             self.node_names = sorted(node_set)
 
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
-
-        self._model = HRMEdgePredictor(
-            x_pixels=self.x_pixels,
-            hidden_size=self.h_dim,
-            num_heads=max(1, self.h_dim // 64),
-            H_layers=self.H_layers,
-            L_layers=self.L_layers,
-            H_cycles=self.H_cycles,
-            L_cycles=self.L_cycles,
-        )
-        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
-
-        for edge in edges:
-            self._prediction_queue[edge] = []
-            self._carry[edge] = None
+        self._build_model()
 
     def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
         closes = self._close_buffer.get(edge, [])
@@ -578,8 +632,24 @@ class HierarchicalReasoningModel:
             except Exception as exc:
                 print(f"Skipping checkpoint load for {path}: unsupported legacy format ({exc})")
                 return
-        if self._model is not None and 'model' in state:
+        if not isinstance(state, dict) or 'model' not in state:
+            print(f"Skipping checkpoint load for {path}: unsupported checkpoint payload")
+            return
+
+        self._apply_checkpoint_config(state)
+
+        if self.edge_names:
+            self._build_model()
+
+        if self._model is not None:
             self._model.load_state_dict(state['model'])
+            print(
+                f"Loaded checkpoint {path}: "
+                f"x_pixels={self.x_pixels}, y_depth={self.y_depth}, "
+                f"h_dim={self.h_dim}, z_dim={self.z_dim}, "
+                f"H_layers={self.H_layers}, L_layers={self.L_layers}, "
+                f"prediction_depth={self.prediction_depth}"
+            )
 
     def grow(self, dim: str):
         """Grow one dimension by 4× using rotational expansion.

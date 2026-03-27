@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autotrade Torch Conductor2"
+  short_description: "Load the active autotrade Torch/Python contract before editing"
+  default_prompt: "Use $conductor2-autotrade-torch to work inside autotrade without drifting into stale Swift or fake-ANE assumptions."
