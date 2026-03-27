@@ -89,6 +89,10 @@ Package.resolved
 test_*
 ane_hrm_train
 *.m~
+*.d
+*.dia
+*.swiftdeps
+*.o
 
 # External dependencies
 external/

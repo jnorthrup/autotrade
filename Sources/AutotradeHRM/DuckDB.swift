@@ -68,6 +68,29 @@ public final class DuckDB: @unchecked Sendable {
         }
     }
     
+    public func execute(_ sql: String) throws {
+        try queue.sync {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["duckdb", dbPath, "-cmd", sql]
+            task.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            task.standardOutput = outPipe
+            task.standardError = errPipe
+            
+            try task.run()
+            task.waitUntilExit()
+            
+            guard task.terminationStatus == 0 else {
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let errMsg = String(data: errData, encoding: .utf8) ?? "Unknown error"
+                throw NSError(domain: "DuckDB", code: Int(task.terminationStatus), userInfo: [NSLocalizedDescriptionKey: errMsg])
+            }
+        }
+    }
+    
     private func runQuery(_ sql: String) throws -> [[String]] {
         return try queue.sync {
             let task = Process()

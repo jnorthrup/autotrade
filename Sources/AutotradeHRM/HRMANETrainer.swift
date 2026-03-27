@@ -21,82 +21,69 @@ public struct HRMANETrainer {
         self.learningRate = learningRate
     }
 
-    /// Train HRM edge predictor using ANE
+    /// Train HRM edge predictor using ANE.
+    ///
+    /// This surface is fail-closed until the real Espresso-backed trainer exists.
     /// - Parameters:
     ///   - edge: Edge identifier
     ///   - fisheyeData: Fisheye features [yDepth, xPixels]
     ///   - targets: Target values (frac, ptt, stop)
     ///   - steps: Number of training steps
-    /// - Returns: Average loss
+    /// - Throws: `ANEError.trainingUnavailable` until the real trainer exists
     public mutating func trainEdge(
         edge: String,
         fisheyeData: [[Double]],
         targets: [(frac: Double, ptt: Double, stop: Double)],
         steps: Int = 100
-    ) -> Double {
-        print("[ANE HRM] Training edge: \(edge)")
-        print("[ANE HRM]   Fisheye: \(fisheyeData.count) x \(fisheyeData.first?.count ?? 0)")
-        print("[ANE HRM]   Samples: \(targets.count)")
-        print("[ANE HRM]   Steps: \(steps)")
-
-        // TODO: Integrate with Espresso ANE training
-        // For now, return placeholder loss
-        // Need to:
-        // 1. Compile ANE kernels for HRM layers
-        // 2. Load fisheye data into IOSurface buffers
-        // 3. Run forward/backward on ANE
-        // 4. Update weights with Adam
-
-        var totalLoss = 0.0
-        for step in 0..<steps {
-            // Sample random training example
-            let idx = Int.random(in: 0..<targets.count)
-            let target = targets[idx]
-            let fisheyeColumn = fisheyeData.map { $0[idx % $0.count] }
-
-            // Simple placeholder loss
-            let predFrac = 0.5
-            let predPtt = 0.5
-            let predStop = 0.5
-
-            let loss = bceLoss(pred: predFrac, target: target.frac) +
-                       bceLoss(pred: predPtt, target: target.ptt) +
-                       bceLoss(pred: predStop, target: target.stop)
-
-            totalLoss += loss
-
-            if step % 20 == 0 {
-                print("[ANE HRM]   Step \(step): loss=\(String(format: "%.6f", loss))")
-            }
-        }
-
-        return totalLoss / Double(steps)
+    ) throws -> Double {
+        throw ANEError.trainingUnavailable(
+            edge: edge,
+            fisheyeRows: fisheyeData.count,
+            fisheyeColumns: fisheyeData.first?.count ?? 0,
+            targetCount: targets.count,
+            steps: steps,
+            reason: "HRMANETrainer is a placeholder; Espresso-backed ANE training is not implemented in this repo."
+        )
     }
 
     /// Export HRM weights to Espresso-compatible format
     public func exportWeights(model: HRMModel, to path: String) throws {
-        print("[ANE HRM] Exporting weights to: \(path)")
-        // TODO: Implement weight export
-        // Format: binary checkpoint compatible with Espresso ANE training
-        throw ANEError.notImplemented
+        _ = model
+        throw ANEError.checkpointExportUnavailable(
+            path: path,
+            reason: "Checkpoint export is not implemented for the HRM ANE trainer."
+        )
     }
 
     /// Import HRM weights from Espresso checkpoint
     public mutating func importWeights(from path: String) throws -> HRMModel {
-        print("[ANE HRM] Importing weights from: \(path)")
-        // TODO: Implement weight import
-        throw ANEError.notImplemented
+        throw ANEError.checkpointImportUnavailable(
+            path: path,
+            reason: "Checkpoint import is not implemented for the HRM ANE trainer."
+        )
     }
 }
 
-enum ANEError: Error {
-    case notImplemented
-    case checkpointNotFound(String)
-    case weightMismatch(String)
-}
+enum ANEError: Error, Equatable, LocalizedError {
+    case trainingUnavailable(
+        edge: String,
+        fisheyeRows: Int,
+        fisheyeColumns: Int,
+        targetCount: Int,
+        steps: Int,
+        reason: String
+    )
+    case checkpointExportUnavailable(path: String, reason: String)
+    case checkpointImportUnavailable(path: String, reason: String)
 
-private func bceLoss(pred: Double, target: Double) -> Double {
-    let eps = 1e-7
-    let p = max(min(pred, 1.0 - eps), eps)
-    return -(target * log(p) + (1.0 - target) * log(1.0 - p))
+    var errorDescription: String? {
+        switch self {
+        case let .trainingUnavailable(edge, fisheyeRows, fisheyeColumns, targetCount, steps, reason):
+            return "ANE training unavailable for edge \(edge) (fisheye=\(fisheyeRows)x\(fisheyeColumns), samples=\(targetCount), steps=\(steps)): \(reason)"
+        case let .checkpointExportUnavailable(path, reason):
+            return "ANE checkpoint export unavailable for \(path): \(reason)"
+        case let .checkpointImportUnavailable(path, reason):
+            return "ANE checkpoint import unavailable for \(path): \(reason)"
+        }
+    }
 }

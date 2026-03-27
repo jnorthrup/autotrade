@@ -33,7 +33,9 @@ public class CoinGraph: @unchecked Sendable {
     public private(set) var nodeState: [String: NodeState] = [:]
     public private(set) var commonTimestamps: [Date] = []
     
-    private var volatility: [String: [Double]] = [:]
+    private var volatility: [String: RollingMeanBuffer] = [:]
+    // Keep a per-edge cursor so sequential bar traversal advances instead of rescanning.
+    private var edgeCursorState: [String: EdgeCursorState] = [:]
     private let volWindow = 20
     private var db: DuckDBFFI?
     
@@ -47,7 +49,7 @@ public class CoinGraph: @unchecked Sendable {
         Swift.print("DEBUG: Initializing DB...")
 
         Swift.print("DEBUG: Creating DuckDBFFI...")
-        db = DuckDBFFI(path: "candles.duckdb")
+        db = try DuckDBFFI(path: "candles.duckdb")
         Swift.print("DEBUG: DuckDBFFI assigned")
         guard let db = db else {
             Swift.print("DEBUG: db is nil!")
@@ -70,8 +72,8 @@ public class CoinGraph: @unchecked Sendable {
             Swift.print("DEBUG: Cache miss, discovering pairs...")
         }
         
-        // Discover pairs if not cached
-        if pairs.isEmpty && !skipFetch {
+        // Discover pairs from database if not cached
+        if pairs.isEmpty {
             let products = try db.queryProducts()
             var adjacency: [String: Set<String>] = [:]
             
@@ -129,6 +131,7 @@ public class CoinGraph: @unchecked Sendable {
         // Load in batches of 20 pairs to avoid SQL IN clause limits
         let batchSize = 20
         var candlesByPair: [String: [DBCandle]] = [:]
+        candlesByPair.reserveCapacity(pairs.count)
 
         for batchStart in stride(from: 0, to: pairs.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, pairs.count)
@@ -144,9 +147,20 @@ public class CoinGraph: @unchecked Sendable {
 
         // Assign to edges and track loaded pairs
         var loaded = 0
+        edges.removeAll(keepingCapacity: true)
+        edgeState.removeAll(keepingCapacity: true)
+        nodeState.removeAll(keepingCapacity: true)
+        volatility.removeAll(keepingCapacity: true)
+        edgeCursorState.removeAll(keepingCapacity: true)
+        edges.reserveCapacity(pairs.count)
+        edgeState.reserveCapacity(pairs.count * 2)
+        nodeState.reserveCapacity(pairs.count * 2)
+        volatility.reserveCapacity(pairs.count)
+        edgeCursorState.reserveCapacity(pairs.count)
         for product in pairs {
             if let candles = candlesByPair[product], !candles.isEmpty {
                 edges[product] = candles
+                resetEdgeCursor(edge: product)
 
                 let parts = product.split(separator: "-", maxSplits: 1)
                 if parts.count == 2 {
@@ -183,7 +197,7 @@ public class CoinGraph: @unchecked Sendable {
         // Always put USD first
         if nodes.contains("USD") {
             nodes.remove("USD")
-            var sorted = nodes.sorted()
+            let sorted = nodes.sorted()
             nodes = ["USD"]
             nodes.formUnion(sorted)
         }
@@ -228,10 +242,8 @@ public class CoinGraph: @unchecked Sendable {
         
         let ts = commonTimestamps[barIdx]
         
-        for (product, candles) in edges {
-            guard let idx = candles.firstIndex(where: { $0.timestamp == ts }) else { continue }
-            
-            let candle = candles[idx]
+        for (product, _) in edges {
+            guard let candle = candle(at: ts, for: product) else { continue }
             let close = candle.close
             let openPrice = candle.open
             
@@ -247,15 +259,10 @@ public class CoinGraph: @unchecked Sendable {
             edgeAccels[product] = accel
             edgeVelocities[product] = velocity
             
-            // Track volatility for band computation
-            volatility[product, default: []].append(abs(velocity))
-            if (volatility[product]?.count ?? 0) > volWindow {
-                volatility[product]?.removeFirst()
-            }
-            
-            // Compute bands: fee + volatility noise floor
-            let volArray = volatility[product] ?? []
-            let vol = volArray.isEmpty ? 0.0 : volArray.reduce(0, +) / Double(volArray.count)
+            // Track volatility with a fixed-size rolling mean instead of shifting arrays every bar.
+            var rollingVolatility = volatility[product] ?? RollingMeanBuffer(limit: volWindow)
+            let vol = rollingVolatility.appendAndMean(abs(velocity))
+            volatility[product] = rollingVolatility
             edgeState[product]?.ptt = feeRate + vol
             edgeState[product]?.stop = -(feeRate + vol)
             
@@ -272,6 +279,121 @@ public class CoinGraph: @unchecked Sendable {
         return (edgeAccels, edgeVelocities, hitPtt, hitStop)
     }
     
+    public func setEdges(
+        edges: [String: [DBCandle]],
+        edgeState: [String: EdgeState],
+        nodeState: [String: NodeState],
+        nodes: Set<String>,
+        allPairs: [String],
+        commonTimestamps: [Date]
+    ) {
+        self.edges = edges
+        self.edgeState = edgeState
+        self.nodeState = nodeState
+        self.nodes = nodes
+        self.allPairs = allPairs
+        self.commonTimestamps = commonTimestamps
+        volatility.removeAll(keepingCapacity: true)
+        edgeCursorState.removeAll(keepingCapacity: true)
+        edgeCursorState.reserveCapacity(edges.count)
+        for edge in edges.keys {
+            resetEdgeCursor(edge: edge)
+        }
+    }
+    
+    private struct EdgeCursorState {
+        var lastTimestamp: Date?
+        var lastIndex: Int
+    }
+
+    private struct RollingMeanBuffer {
+        let limit: Int
+        var values: [Double]
+        var start: Int
+        var count: Int
+        var sum: Double
+
+        init(limit: Int) {
+            self.limit = max(1, limit)
+            self.values = Array(repeating: 0.0, count: max(1, limit))
+            self.start = 0
+            self.count = 0
+            self.sum = 0.0
+        }
+
+        mutating func appendAndMean(_ value: Double) -> Double {
+            if count < limit {
+                let insertIndex = (start + count) % limit
+                values[insertIndex] = value
+                count += 1
+                sum += value
+            } else {
+                sum -= values[start]
+                values[start] = value
+                sum += value
+                start = (start + 1) % limit
+            }
+
+            return count > 0 ? sum / Double(count) : 0.0
+        }
+    }
+
+    private func resetEdgeCursor(edge: String) {
+        edgeCursorState[edge] = EdgeCursorState(lastTimestamp: nil, lastIndex: 0)
+        volatility[edge] = RollingMeanBuffer(limit: volWindow)
+    }
+
+    private func candleLowerBound(for timestamp: Date, in candles: [DBCandle]) -> Int {
+        var lower = 0
+        var upper = candles.count
+
+        while lower < upper {
+            let mid = lower + (upper - lower) / 2
+            if candles[mid].timestamp < timestamp {
+                lower = mid + 1
+            } else {
+                upper = mid
+            }
+        }
+
+        return lower
+    }
+
+    private func candle(at timestamp: Date, for edge: String) -> DBCandle? {
+        guard let candles = edges[edge], !candles.isEmpty else {
+            return nil
+        }
+
+        if let cached = edgeCursorState[edge], let lastTimestamp = cached.lastTimestamp, timestamp >= lastTimestamp {
+            var index = min(cached.lastIndex, candles.count - 1)
+
+            if candles[index].timestamp < timestamp {
+                while index + 1 < candles.count, candles[index].timestamp < timestamp {
+                    index += 1
+                }
+            } else if candles[index].timestamp > timestamp {
+                index = candleLowerBound(for: timestamp, in: candles)
+            }
+
+            if index < candles.count, candles[index].timestamp == timestamp {
+                edgeCursorState[edge] = EdgeCursorState(lastTimestamp: timestamp, lastIndex: index)
+                return candles[index]
+            }
+
+            edgeCursorState[edge] = EdgeCursorState(lastTimestamp: timestamp, lastIndex: min(index, candles.count - 1))
+            return nil
+        }
+
+        let index = candleLowerBound(for: timestamp, in: candles)
+        guard index < candles.count, candles[index].timestamp == timestamp else {
+            edgeCursorState[edge] = EdgeCursorState(lastTimestamp: timestamp, lastIndex: min(index, candles.count - 1))
+            return nil
+        }
+
+        edgeCursorState[edge] = EdgeCursorState(lastTimestamp: timestamp, lastIndex: index)
+        return candles[index]
+    }
+
     private func computeHeights(edgeAccels: [String: Double]) {
         var outflow: [String: [Double]] = [:]
         

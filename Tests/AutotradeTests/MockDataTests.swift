@@ -5,8 +5,9 @@
 //  Tests using mock data for components that require database
 //
 
+import Foundation
 import Testing
-import AutotradeHRM
+@testable import AutotradeHRM
 
 @Suite("Mock Data Tests")
 struct MockDataTests {
@@ -79,26 +80,36 @@ struct MockDataTests {
         #expect(fisheyeData.allSatisfy { $0.isFinite })
     }
 
-    @Test("Model training with mock data")
-    func testModelTrainingWithMockData() {
+    @Test("Model prediction with mock data")
+    func testModelPredictionWithMockData() {
         let mockCandles = createMockCandles(count: 100)
-        let mockFisheye = (0..<20).map { _ in Double.random(in: -0.1...0.1) }
 
+        let xPixels = 20
         var model = HRMModel(
             nEdges: 1,
-            hDim: 8,
-            zDim: 8,
-            xPixels: 20
+            hDim: 4,
+            zDim: 4,
+            xPixels: xPixels
         )
 
         model.registerEdges(["MOCK-USD"])
 
-        // Simulate training step
-        let loss = model.trainStep(edge: "MOCK-USD", fisheyeColumn: mockFisheye, targetFrac: 0.5, targetPtt: 0.0, targetStop: 0.0)
+        // Feed enough bars so fisheye buffer fills up
+        let timestamps = mockCandles.map { $0.timestamp }
+        let edges: [String: [DBCandle]] = ["MOCK-USD": mockCandles]
 
-        #expect(loss != nil)
-        #expect(loss! >= 0)
-        #expect(loss!.isFinite)
+        // Advance through bars to populate closeBuffer
+        var predictions: [String: (fraction: Double, ptt: Double, stop: Double)] = [:]
+        for i in 0..<min(100, timestamps.count) {
+            predictions = model.predict(commonTimestamps: timestamps, edges: edges, barIdx: i)
+        }
+
+        #expect(predictions["MOCK-USD"] != nil)
+        if let pred = predictions["MOCK-USD"] {
+            #expect(pred.fraction.isFinite)
+            #expect(pred.ptt.isFinite)
+            #expect(pred.stop.isFinite)
+        }
     }
 
     @Test("Batch processing simulation")
