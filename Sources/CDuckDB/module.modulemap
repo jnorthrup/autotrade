@@ -1,5 +1,0 @@
-module CDuckDB {
-    header "/opt/homebrew/include/duckdb.h"
-    link "duckdb"
-    export *
-}

@@ -1,5 +1,7 @@
 # Agent Context for autotrade
 
+ANE REMOVED.  End of story
+
 ## CRITICAL: HRM Rotary Growth Invariant
 
 **HRM = Hierarchical Reasoning Model** — two-level reasoning (high-level node state + low-level edge predictions)
@@ -55,6 +57,12 @@ python -c "from hrm_model import HierarchicalReasoningModel; m = HierarchicalRea
 
 These decisions are now part of the repository contract. Do not silently drift away from them.
 
+### ACTIVE BACKEND
+
+- The primary implementation path is now **PyTorch in `HRM/`**, not Swift and not private-API ANE code.
+- On this Apple Silicon machine, prefer **Torch on Metal/MPS** as the default training/inference backend unless there is an explicit reason to target ANE research code.
+- Treat `ANE/` as experimental/reference material unless the task explicitly asks for ANE work.
+
 ### HOT PATH SHAPE
 
 - The autotrade hot path should maintain **one monotonic per-edge cursor/state object** and advance it once per bar.
@@ -75,8 +83,17 @@ These decisions are now part of the repository contract. Do not silently drift a
 - ANE input paths should use **tile-aligned packed rows** and contiguous projection storage.
 - Pad feature rows to a stable tile width before ANE projection; avoid ragged row layouts in the ANE wrapper.
 - Favor ring buffers and fixed-capacity rolling windows over repeated `removeFirst`, `suffix`, or shifting arrays in hot loops.
+- Treat ANE as an **inference-first accelerator**. Do not assume it will beat Apple GPU + Metal, or the mature PyTorch + Metal stack, on raw speed.
+- The primary ANE win is **power efficiency**, not absolute throughput. Use it when the goal is better performance per watt, even if raw wall-clock speed may favor GPU paths.
 - ANE changes the economics and preferred memory layout of the training shell, but it does **not** change HRM rotary growth invariants.
 - If the ANE wrapper is actually in CPU fallback mode, exit quickly to the regular HRM path instead of running a fake-ANE slow loop.
+
+### M3 Pro ANE Constraint
+
+- This machine is an **Apple M3 Pro**, and the current reverse-engineered ANE path should treat **`ch=512` as the only safe channel width**.
+- Do **not** assume M4 channel flexibility on M3 Pro. Reports from `maderix/ANE` issue `#3`, comment `3988541725`, dated **March 3, 2026**, indicate the M3 Pro ANE compiler rejected **51 of 52 tested channel counts** and accepted **only `512`**.
+- For M3 Pro tuning, chase throughput with **spatial tiling, packed width, and depth**, not arbitrary channel-count sweeps.
+- If a codepath requests ANE execution on M3 Pro with any channel width other than `512`, it should **fail fast or route to the non-ANE path** instead of pretending the config is supported.
 
 ## ANE TRAINING INTEGRATION
 
@@ -131,3 +148,9 @@ ANE training uses custom binary checkpoint format (`ANECheckpointFormat`):
 - Per param: Name + shape + dtype + data
 
 This bridges PyTorch state_dicts with ANE training code.
+The correct priority order is:
+
+keep Python as the only active implementation surface
+absorb any remaining donor logic into Python, not Swift
+make the ANE/CoreML path truthful
+only then decide what fallback behavior, if any, remains

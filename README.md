@@ -272,69 +272,12 @@ a time, never losing prior convergence.
 6. Converge between every step. Never skip a plateau check.
 7. The original converged block is the eternal anchor.
 
-## Building and Running
+## Active Surface
 
-### Prerequisites
+Python is the only active implementation surface in this repo.
 
-- macOS 15.0+
-- Swift 6.0+
-- DuckDB CLI installed (`brew install duckdb`)
-
-### Build
-
-```bash
-swift build
-```
-
-### Run
-
-```bash
-# Run with default settings (ANE training with CPU fallback)
-./run.sh
-
-# Run with explicit ANE training mode
-./run.sh --ane-training
-
-# Run with autoresearch mode (square cube progression)
-./run.sh --autoresearch
-
-# Run with custom parameters
-./run.sh --start-bar 0 --end-bar 10000 --print-every 100 --h-dim 4 --z-dim 4 --lr 0.001
-
-# Run autoresearch with specific exchange
-./run.sh --autoresearch --exchange coinbase --min-partners 5
-
-# Force regular CPU training (bypass ANE attempt)
-./run.sh --cpu-only
-```
-
-### Command Line Options
-
-- `--autoresearch`: Enable autoresearch mode with square cube progression
-- `--ane-training`: Explicitly request ANE training (now default behavior)
-- `--cpu-only`: Skip ANE attempt and use regular HRM training only
-- `--start-bar <int>`: Starting bar index (default: 0)
-- `--end-bar <int>`: Ending bar index (default: 10000)
-- `--print-every <int>`: Print progress every N bars (default: 100)
-- `--min-partners <int>`: Minimum trading partners per pair (default: 5)
-- `--max-partners <int>`: Maximum trading partners per pair (optional)
-- `--skip-fetch`: Skip fetching new candle data
-- `--exchange <coinbase|binance>`: Exchange to use (default: coinbase)
-- `--prediction-depth <int>`: Prediction depth (default: 1)
-- `--h-dim <int>`: Hidden dimension (default: 4)
-- `--z-dim <int>`: Latent dimension (default: 4)
-- `--lr <float>`: Learning rate (default: 0.001)
-- `--y-depth <int>`: Y depth for fisheye (default: 200)
-- `--x-pixels <int>`: X pixels for fisheye (default: 20)
-- `--curvature <float>`: Fisheye curvature (default: 2.0)
-- `--z-dim <int>`: Latent dimension (default: 4, must equal h-dim)
-- `--lr <float>`: Learning rate (default: 0.001)
-- `--y-depth <int>`: Y depth for fisheye (default: 200)
-- `--x-pixels <int>`: X pixels for fisheye (default: 20)
-- `--curvature <float>`: Fisheye curvature (default: 2.0)
-
-### Output
-
-- Model weights saved to `model_weights.pt`
-- Grown model saved to `model_weights_grown.pt`
-- Experiment records saved to DuckDB `experiments` table in `candles.duckdb`
+- Ongoing work lives under `HRM/` and `ANE/`.
+- The primary model path is **PyTorch** in `HRM/`, with Metal/MPS preferred on Apple Silicon.
+- `ANE/` remains as research/reference material, not the default execution target.
+- The Swift package, Swift sources, and Swift tests were removed.
+- If old Swift behavior is still needed, recover it from git history and port it into Python instead of reviving Swift targets.

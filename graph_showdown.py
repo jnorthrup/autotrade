@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+import argparse
+import random
+import time
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+from hrm_model import HierarchicalReasoningModel
+from coin_graph import CoinGraph
+
+import duckdb
+
+# Square cube progression: hidden_size, always powers of 4
+SQUARE_CUBE_SIZES = [4, 16, 64, 256]
+PLATEAU_WINDOW = 100
+PLATEAU_THRESHOLD = 1e-5
+PLATEAU_PATIENCE = 3
+
+# Growth cycle for square cube: which dimension leads next
+# Cycle: h (hidden_size leads) -> H (H_layers catches up) -> L (L_layers catches up) -> h (cubed, cycle repeats)
+GROWTH_CYCLE = ['h', 'H', 'L']
+
+
+def _is_converged(losses: List[float]) -> bool:
+    """Sustained plateau detection across PATIENCE windows."""
+    n = len(losses)
+    if n < PLATEAU_WINDOW * PLATEAU_PATIENCE:
+        return False
+    for i in range(PLATEAU_PATIENCE):
+        chunk = losses[-PLATEAU_WINDOW * (PLATEAU_PATIENCE - i):]
+        if len(chunk) < PLATEAU_WINDOW:
+            continue
+        recent = np.mean(chunk[-PLATEAU_WINDOW:])
+        older = np.mean(chunk[:PLATEAU_WINDOW])
+        if abs(recent - older) > PLATEAU_THRESHOLD:
+            return False
+    return True
+
+
+def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar: int = 0,
+                 end_bar: Optional[int] = None, print_every: int = 100,
+                 loss_history: Optional[List[float]] = None) -> Tuple[float, int, bool, List[float]]:
+    """Train model on graph bars. Returns (total_loss, n_updates, early_stopped, loss_history)."""
+    if end_bar is None:
+        end_bar = len(graph.common_timestamps)
+    
+    if loss_history is None:
+        loss_history = []
+    
+    ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
+    bars_with_data = set()
+    for df in graph.edges.values():
+        common_ts = set(df.index) & ts_to_bar.keys()
+        bars_with_data.update(ts_to_bar[ts] for ts in common_ts)
+    
+    total_loss = 0.0
+    n_updates = 0
+    early_stopped = False
+    
+    sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
+    print(f"Training on {len(sorted_bars)} bars with data")
+    
+    for i, bar_idx in enumerate(sorted_bars):
+        if bar_idx >= len(graph.common_timestamps):
+            break
+        
+        edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
+        
+        if not edge_accels:
+            continue
+        
+        if bar_idx >= model.prediction_depth:
+            model.predict(graph, bar_idx)
+        
+        if bar_idx >= model.prediction_depth * 2:
+            loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
+            if loss is not None:
+                total_loss += loss
+                n_updates += 1
+                loss_history.append(loss)
+        
+        if i % print_every == 0 and i > 0:
+            avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
+            print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
+    
+    return total_loss, n_updates, early_stopped, loss_history
+
+
+def _build_pair_adjacency(all_pairs: List[str]) -> Dict[str, List[str]]:
+    adj: Dict[str, List[str]] = {}
+    for pid in all_pairs:
+        parts = pid.split("-", 1)
+        if len(parts) != 2:
+            continue
+        for currency in parts:
+            adj.setdefault(currency, []).append(pid)
+    return adj
+
+
+def _select_related_pairs(all_pairs: List[str], adj: Dict[str, List[str]],
+                          n_pairs: int, rng: random.Random) -> List[str]:
+    if n_pairs >= len(all_pairs):
+        return list(all_pairs)
+
+    currencies = list(adj.keys())
+    if not currencies:
+        return list(all_pairs)[:n_pairs]
+
+    selected = set()
+    seed_currency = rng.choice(currencies)
+    frontier = [seed_currency]
+    visited_currencies = {seed_currency}
+
+    while len(selected) < n_pairs and frontier:
+        curr = frontier.pop(0)
+        candidates = [p for p in adj.get(curr, []) if p not in selected]
+        rng.shuffle(candidates)
+        for pid in candidates:
+            if len(selected) >= n_pairs:
+                break
+            selected.add(pid)
+            parts = pid.split("-", 1)
+            for c in parts:
+                if c not in visited_currencies:
+                    visited_currencies.add(c)
+                    frontier.append(c)
+
+        if not frontier and len(selected) < n_pairs:
+            remaining = [c for c in currencies if c not in visited_currencies]
+            if remaining:
+                new_seed = rng.choice(remaining)
+                frontier.append(new_seed)
+                visited_currencies.add(new_seed)
+
+    return list(selected)
+
+
+def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
+                      start_bar: int, end_bar: int) -> CoinGraph:
+    from coin_graph import EdgeState, NodeState
+    
+    trial = CoinGraph(fee_rate=full_graph.fee_rate)
+    trial.all_pairs = selected_pairs
+
+    pair_to_edges = {}
+    for pid in full_graph.all_pairs:
+        parts = pid.split("-", 1)
+        if len(parts) == 2:
+            pair_to_edges[pid] = (parts[0], parts[1])
+
+    for pid in selected_pairs:
+        if pid not in pair_to_edges:
+            continue
+        base, quote = pair_to_edges[pid]
+        for edge in [(base, quote), (quote, base)]:
+            if edge in full_graph.edges:
+                trial.edges[edge] = full_graph.edges[edge]
+                trial.edge_state[edge] = EdgeState()
+        trial.nodes.add(base)
+        trial.nodes.add(quote)
+        trial.node_state.setdefault(base, NodeState())
+        trial.node_state.setdefault(quote, NodeState())
+
+    trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
+    return trial
+
+
+def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
+    """
+    Autoresearch with Square Cube Progression.
+
+    Starts with tiny HRM (hidden_size=4, H_layers=1, L_layers=1).
+    Trains until plateau, then grows one dimension by 4× using rotational expansion.
+
+    Growth cycle: h -> H -> L -> h (hidden_size leads, then layers catch up)
+    Square sizes: 4 -> 16 -> 64 -> 256 (always powers of 4)
+    """
+    print("Using HRMEdgePredictor for hierarchical reasoning")
+
+    conn = duckdb.connect('candles.duckdb')
+    
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS experiments (
+            timestamp TIMESTAMP DEFAULT now(),
+            val_bpb DOUBLE,
+            params VARCHAR,
+            bag_spec VARCHAR,
+            growth_phase VARCHAR
+        )
+    """)
+
+    best_bpb = float('inf')
+    best_params = None
+
+    adj = _build_pair_adjacency(graph.all_pairs)
+    total_bars = len(graph.common_timestamps)
+    total_pairs = len(graph.all_pairs)
+    rng = random.Random()
+
+    MIN_PAIRS = max(4, total_pairs // 8)
+    MAX_PAIRS = total_pairs
+    MIN_WINDOW_BARS = max(200, total_bars // 20)
+    MAX_WINDOW_BARS = total_bars
+
+    # Square cube state
+    growth_idx = 0  # index into GROWTH_CYCLE
+    hidden_size = SQUARE_CUBE_SIZES[0]  # start at 4
+    H_layers = 1
+    L_layers = 1
+    current_h_dim = hidden_size
+    phase = 0
+
+    print(f"\nAutoresearch: {total_pairs} pairs, {total_bars} bars")
+    print(f"Square Cube: hidden_size={hidden_size}, H_layers={H_layers}, L_layers={L_layers}")
+    print(f"Curriculum: pairs [{MIN_PAIRS}..{MAX_PAIRS}], window [{MIN_WINDOW_BARS}..{MAX_WINDOW_BARS}]")
+    print("Press Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            phase += 1
+            progress = min(1.0, phase / 200.0)
+
+            # Bag progression (unchanged)
+            pair_ceil = int(MIN_PAIRS + (MAX_PAIRS - MIN_PAIRS) * progress)
+            n_pairs = rng.randint(MIN_PAIRS, max(MIN_PAIRS, pair_ceil))
+            selected_pairs = _select_related_pairs(graph.all_pairs, adj, n_pairs, rng)
+            n_pairs = len(selected_pairs)
+
+            window_ceil = int(MIN_WINDOW_BARS + (MAX_WINDOW_BARS - MIN_WINDOW_BARS) * progress)
+            window_bars = rng.randint(MIN_WINDOW_BARS, max(MIN_WINDOW_BARS, window_ceil))
+            window_bars = min(window_bars, total_bars)
+
+            max_start = max(0, total_bars - window_bars)
+            start_bar = rng.randint(0, max_start) if max_start > 0 else 0
+            end_bar = start_bar + window_bars
+
+            window_days = round(window_bars * 5 / (60 * 24), 1)
+
+            trial_graph = _make_trial_graph(graph, selected_pairs, start_bar, end_bar)
+            if not trial_graph.edges:
+                print(f"Phase {phase}: empty graph, skipping")
+                continue
+
+            lr = 10 ** random.uniform(-4, -1.5)
+            y_depth = random.choice([100, 200, 300, 400])
+            x_pixels = random.choice([10, 15, 20, 30])
+            curvature = random.uniform(0.5, 4.0)
+            prediction_depth = random.choice([1, 2, 3, 5, 10])
+
+            print(f"\n=== Phase {phase} (p={progress:.2f}) ===")
+            print(f"  Square: hidden_size={current_h_dim}, H_layers={H_layers}, L_layers={L_layers}")
+            print(f"  Bag: {n_pairs} pairs, {window_bars} bars ({window_days}d)")
+
+            model = HierarchicalReasoningModel(
+                n_edges=len(trial_graph.edges),
+                learning_rate=lr,
+                y_depth=y_depth,
+                x_pixels=x_pixels,
+                curvature=curvature,
+                h_dim=current_h_dim,
+                z_dim=current_h_dim,
+                prediction_depth=prediction_depth,
+                H_layers=H_layers,
+                L_layers=L_layers,
+                H_cycles=2,
+                L_cycles=2,
+            )
+            model.register_edges(list(trial_graph.edges.keys()))
+
+            # Train with loss history tracking
+            loss_history = []
+            total_loss, n_updates, _, loss_history = run_training(
+                trial_graph, model, print_every=1000, loss_history=loss_history
+            )
+
+            if n_updates > 0:
+                val_bpb = total_loss / n_updates
+            else:
+                val_bpb = 999.0
+
+            growth_dim = GROWTH_CYCLE[growth_idx]
+            print(f"  val_bpb={val_bpb:.6f} (Best: {best_bpb:.6f})")
+
+            if val_bpb < best_bpb:
+                best_bpb = val_bpb
+                params = {
+                    'lr': lr, 'h_dim': current_h_dim,
+                    'y_depth': y_depth, 'x_pixels': x_pixels,
+                    'curvature': curvature, 'prediction_depth': prediction_depth,
+                    'H_layers': H_layers, 'L_layers': L_layers,
+                }
+                bag_spec = {
+                    'n_pairs': n_pairs, 'window_bars': window_bars,
+                    'window_days': window_days, 'start_bar': start_bar
+                }
+                best_params = {**params, **bag_spec, 'growth_phase': f'{growth_dim}'}
+                print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
+                model.save("model_weights.pt")
+
+            conn.execute(
+                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase) VALUES (now(), ?, ?, ?, ?)",
+                [val_bpb, str(params), str(bag_spec), growth_dim]
+            )
+
+            # Check for convergence and trigger growth
+            if _is_converged(loss_history):
+                old_h = current_h_dim
+                old_H = H_layers
+                old_L = L_layers
+
+                # Grow next dimension in cycle
+                if growth_dim == 'h':
+                    # hidden_size leads: find next size
+                    if hidden_size in SQUARE_CUBE_SIZES:
+                        idx = SQUARE_CUBE_SIZES.index(hidden_size)
+                        if idx + 1 < len(SQUARE_CUBE_SIZES):
+                            hidden_size = SQUARE_CUBE_SIZES[idx + 1]
+                            current_h_dim = hidden_size
+                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                        else:
+                            # Max size reached, just rotate layers
+                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                    else:
+                        # Interpolate: grow to next power of 4
+                        hidden_size = hidden_size * 4
+                        current_h_dim = hidden_size
+                        growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                    model.grow('h')
+                elif growth_dim == 'H':
+                    H_layers = H_layers * 2 if H_layers < 8 else H_layers + 1
+                    model.grow('H')
+                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                elif growth_dim == 'L':
+                    L_layers = L_layers * 2 if L_layers < 8 else L_layers + 1
+                    model.grow('L')
+                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+
+                print(f"\n  *** CONVERGED -> GROWTH: {growth_dim} {old_h}x{old_h}x{old_h} -> {current_h_dim}x{current_h_dim}x{current_h_dim} [H={H_layers}, L={L_layers}]")
+                
+                # Save grown model state for next phase
+                model.save("model_weights_grown.pt")
+            else:
+                # Not converged, shuffle growth index to try different dimension
+                growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+
+    if best_params:
+        print(f"Best: val_bpb={best_bpb:.6f} with {best_params}")
+    return best_params
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--autoresearch', action='store_true')
+    parser.add_argument('--start-bar', type=int, default=0)
+    parser.add_argument('--end-bar', type=int, default=None)
+    parser.add_argument('--print-every', type=int, default=100)
+    parser.add_argument('--min-partners', type=int, default=5)
+    parser.add_argument('--max-partners', type=int, default=None)
+    parser.add_argument('--skip-fetch', action='store_true')
+    parser.add_argument('--exchange', type=str, default='coinbase', choices=['coinbase', 'binance'])
+    parser.add_argument('--prediction-depth', type=int, default=1)
+    parser.add_argument('--h-dim', type=int, default=16)
+    parser.add_argument('--z-dim', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--y-depth', type=int, default=200)
+    parser.add_argument('--x-pixels', type=int, default=20)
+    parser.add_argument('--curvature', type=float, default=2.0)
+    args = parser.parse_args()
+
+    print("Loading coin graph...")
+    graph = CoinGraph(fee_rate=0.001)
+    n_bars = graph.load(
+        lookback_days=1095 if args.exchange == "binance" else 365,
+        min_partners=args.min_partners,
+        max_partners=args.max_partners,
+        exchange=args.exchange,
+        skip_fetch=args.skip_fetch,
+    )
+    print(f"Loaded {len(graph.nodes)} nodes, {len(graph.edges)} edges, {n_bars} bars")
+    
+    if n_bars == 0:
+        print("No data. Run fetch_candles.py first.")
+        return
+
+    model = HierarchicalReasoningModel(
+        n_edges=len(graph.edges),
+        learning_rate=args.lr,
+        y_depth=args.y_depth,
+        x_pixels=args.x_pixels,
+        curvature=args.curvature,
+        h_dim=args.h_dim,
+        z_dim=args.z_dim,
+        prediction_depth=args.prediction_depth
+    )
+    model.register_edges(list(graph.edges.keys()))
+    model.load("model_weights.pt")
+
+    if args.autoresearch:
+        run_autoresearch(graph)
+    else:
+        loss_history = []
+        end_bar = args.end_bar if args.end_bar else min(n_bars, 10000)
+        print(f"Training from bar {args.start_bar} to {end_bar}...")
+        
+        total_loss, n_updates, _, loss_history = run_training(
+            graph, model,
+            start_bar=args.start_bar,
+            end_bar=end_bar,
+            print_every=args.print_every,
+            loss_history=loss_history
+        )
+        
+        avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
+        print(f"\nDone: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
+        model.save("model_weights.pt")
+
+
+if __name__ == "__main__":
+    main()
