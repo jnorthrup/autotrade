@@ -30,6 +30,13 @@ from torch import Tensor
 from layers_fallback import rms_norm, SwiGLU, Attention, RotaryEmbedding
 
 
+def get_device() -> torch.device:
+    """Return MPS device if available, else CPU."""
+    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def trunc_normal_init_(tensor, std=1.0):
     return nn.init.normal_(tensor, mean=0.0, std=std)
 
@@ -174,12 +181,12 @@ class HRMEdgePredictor(nn.Module):
         # Initial carry states
         self.register_buffer(
             "H_init",
-            trunc_normal_init_(torch.empty(hidden_size, dtype=torch.bfloat16), std=1),
+            trunc_normal_init_(torch.empty(hidden_size, dtype=torch.float32), std=1),
             persistent=True,
         )
         self.register_buffer(
             "L_init",
-            trunc_normal_init_(torch.empty(hidden_size, dtype=torch.bfloat16), std=1),
+            trunc_normal_init_(torch.empty(hidden_size, dtype=torch.float32), std=1),
             persistent=True,
         )
 
@@ -196,8 +203,8 @@ class HRMEdgePredictor(nn.Module):
     def init_carry(self, batch_size: int, device: torch.device) -> HRMEdgeCarry:
         """Initialize empty carry states."""
         return HRMEdgeCarry(
-            z_H=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.bfloat16),
-            z_L=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.bfloat16),
+            z_H=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.float32),
+            z_L=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.float32),
         )
 
     def forward(
@@ -409,6 +416,7 @@ class HierarchicalReasoningModel:
 
         self._model: Optional[HRMEdgePredictor] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
+        self._device: torch.device = get_device()
 
         self._close_buffer: Dict[Tuple[str, str], List[float]] = {}
         self._max_history = max(y_depth + 100, 500)
@@ -423,6 +431,7 @@ class HierarchicalReasoningModel:
             self._carry[edge] = None
 
     def _build_model(self):
+        self._device = get_device()
         self._model = HRMEdgePredictor(
             x_pixels=self.x_pixels,
             hidden_size=self.h_dim,
@@ -431,7 +440,7 @@ class HierarchicalReasoningModel:
             L_layers=self.L_layers,
             H_cycles=self.H_cycles,
             L_cycles=self.L_cycles,
-        )
+        ).to(self._device)
         self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
         self._max_history = max(self.y_depth + 100, 500)
         self._reset_edge_runtime_state()
@@ -534,7 +543,7 @@ class HierarchicalReasoningModel:
         predictions = {}
         with torch.no_grad():
             for edge in self.edge_names:
-                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32).unsqueeze(0)  # (1, x_pixels)
+                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32, device=self._device).unsqueeze(0)  # (1, x_pixels)
                 fraction, ptt, stop, carry = self._model(fisheye, self._carry.get(edge))
                 f, p, s = float(fraction), float(ptt), float(stop)
                 predictions[edge] = (f, p, s)
@@ -558,7 +567,7 @@ class HierarchicalReasoningModel:
         self._optimizer.zero_grad()
         import numpy as np
 
-        total_loss = torch.tensor(0.0)
+        total_loss = torch.tensor(0.0, device=self._device)
         n_scored = 0
 
         for edge in self.edge_names:
@@ -578,12 +587,12 @@ class HierarchicalReasoningModel:
             else:
                 frac_target = 0.5
 
-            fisheye = torch.tensor(frame['fisheye'], dtype=torch.float32).unsqueeze(0)  # (1, x_pixels)
+            fisheye = torch.tensor(frame['fisheye'], dtype=torch.float32, device=self._device).unsqueeze(0)  # (1, x_pixels)
             pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye)
 
-            frac_loss = F.binary_cross_entropy(pred_frac, torch.tensor([frac_target]))
-            ptt_loss = F.binary_cross_entropy(pred_ptt, torch.tensor([ptt_target]))
-            stop_loss = F.binary_cross_entropy(pred_stop, torch.tensor([stop_target]))
+            frac_loss = F.binary_cross_entropy(pred_frac, torch.tensor([frac_target], device=self._device))
+            ptt_loss = F.binary_cross_entropy(pred_ptt, torch.tensor([ptt_target], device=self._device))
+            stop_loss = F.binary_cross_entropy(pred_stop, torch.tensor([stop_target], device=self._device))
 
             total_loss = total_loss + frac_loss + ptt_loss + stop_loss
             n_scored += 1
@@ -624,10 +633,10 @@ class HierarchicalReasoningModel:
             return
         state = None
         try:
-            state = torch.load(path, weights_only=True)
+            state = torch.load(path, weights_only=True, map_location=self._device)
         except Exception:
             try:
-                state = torch.load(path, weights_only=False)
+                state = torch.load(path, weights_only=False, map_location=self._device)
             except Exception as exc:
                 print(f"Skipping checkpoint load for {path}: unsupported legacy format ({exc})")
                 return

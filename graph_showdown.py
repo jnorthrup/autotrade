@@ -10,6 +10,7 @@ import pandas as pd
 
 from hrm_model import HierarchicalReasoningModel
 from coin_graph import CoinGraph
+from config import Config
 
 import duckdb
 
@@ -22,6 +23,62 @@ PLATEAU_PATIENCE = 3
 # Growth cycle for square cube: which dimension leads next
 # Cycle: h (hidden_size leads) -> H (H_layers catches up) -> L (L_layers catches up) -> h (cubed, cycle repeats)
 GROWTH_CYCLE = ['h', 'H', 'L']
+
+
+def _next_square_cube_size(size: int) -> Optional[int]:
+    """Return the next allowed 4^k size, or None at the ceiling."""
+    if size not in SQUARE_CUBE_SIZES:
+        raise ValueError(f"Invalid square-cube size {size}; expected one of {SQUARE_CUBE_SIZES}")
+    idx = SQUARE_CUBE_SIZES.index(size)
+    if idx + 1 >= len(SQUARE_CUBE_SIZES):
+        return None
+    return SQUARE_CUBE_SIZES[idx + 1]
+
+
+def _validate_square_cube_state(hidden_size: int, H_layers: int, L_layers: int):
+    """Enforce powers-of-4 sizes with at most two distinct values."""
+    sizes = (hidden_size, H_layers, L_layers)
+    invalid = [size for size in sizes if size not in SQUARE_CUBE_SIZES]
+    if invalid:
+        raise ValueError(
+            f"Square-cube state must use only {SQUARE_CUBE_SIZES}, got {sizes}"
+        )
+    if len(set(sizes)) > 2:
+        raise ValueError(
+            f"Square-cube state may use at most 2 distinct powers of 4, got {sizes}"
+        )
+
+
+def _apply_growth_step(
+    model: HierarchicalReasoningModel,
+    growth_dim: str,
+    hidden_size: int,
+    H_layers: int,
+    L_layers: int,
+) -> Tuple[int, int, int, bool]:
+    """Apply exactly one 4× growth step if the scheduled dimension can grow."""
+    _validate_square_cube_state(hidden_size, H_layers, L_layers)
+
+    if growth_dim == 'h':
+        if _next_square_cube_size(hidden_size) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('h')
+        hidden_size = model.h_dim
+    elif growth_dim == 'H':
+        if _next_square_cube_size(H_layers) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('H')
+        H_layers = model.H_layers
+    elif growth_dim == 'L':
+        if _next_square_cube_size(L_layers) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('L')
+        L_layers = model.L_layers
+    else:
+        raise ValueError(f"Unknown growth dimension: {growth_dim}")
+
+    _validate_square_cube_state(hidden_size, H_layers, L_layers)
+    return hidden_size, H_layers, L_layers, True
 
 
 def _is_converged(losses: List[float]) -> bool:
@@ -87,6 +144,99 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
             print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
     
     return total_loss, n_updates, early_stopped, loss_history
+
+
+def _list_all_binance_pairs(db_path: str) -> List[str]:
+    """List all Binance-style pairs available in candle_cache (DuckDB)."""
+    try:
+        with duckdb.connect(db_path, read_only=True) as conn:
+            rows = conn.execute("SELECT DISTINCT product_id FROM candles").fetchall()
+            pairs = [r[0] for r in rows]
+            # Filter: must look like BASE-QUOTE with two parts
+            pairs = [p for p in pairs if "-" in p and len(p.split("-", 1)) == 2]
+            return sorted(set(pairs))
+    except Exception as e:
+        print(f"[_list_all_binance_pairs] error: {e}")
+        return []
+
+
+FIAT_CURRENCIES = {
+    "USD", "USDT", "USDC", "EUR", "GBP", "SGD", "JPY", "BRL", "MXN",
+    "TRY", "IDR", "PLN", "ARS", "ZAR", "UAH", "COP", "RUB", "NGN", "EURI",
+}
+
+
+def _compute_volatility_filter(
+    db_path: str,
+    all_pairs: List[str],
+    lookback_days: int = 365,
+    granularity: str = "300",
+    min_velocity: float = 0.001,
+) -> List[str]:
+    """Filter pairs by mean |velocity| (log close/open) and drop fiat-fiat edges.
+
+    Returns pairs with mean |velocity| >= min_velocity and no fiat-fiat edges.
+    """
+    end = datetime.now()
+    start = end - timedelta(days=lookback_days)
+
+    filtered = []
+    with duckdb.connect(db_path, read_only=True) as conn:
+        for pid in all_pairs:
+            parts = pid.split("-", 1)
+            if len(parts) != 2:
+                continue
+            base, quote = parts
+            # Drop fiat-fiat edges
+            if base in FIAT_CURRENCIES and quote in FIAT_CURRENCIES:
+                continue
+            # Compute mean |log(close/open)| over the lookback window
+            try:
+                row = conn.execute(
+                    """SELECT AVG(ABS(LN(close / NULLIF(open, 0))))
+                       FROM candles
+                       WHERE product_id = ? AND granularity = ?
+                         AND timestamp BETWEEN ? AND ?
+                         AND open > 0 AND close > 0""",
+                    [pid, granularity, start, end],
+                ).fetchone()
+                mean_vel = row[0] if row and row[0] is not None else 0.0
+            except Exception:
+                mean_vel = 0.0
+
+            if mean_vel >= min_velocity:
+                filtered.append(pid)
+
+    return sorted(set(filtered))
+
+
+# Model-size to bag-size scaling: 4->5, 16->20, 64->40, 256->80
+_BAG_SIZE_SCALE = {4: 5, 16: 20, 64: 40, 256: 80}
+
+
+def _stochastic_bag_sample(
+    filtered_pairs: List[str],
+    model_size: int,
+    rng: random.Random,
+    min_pairs: int = 5,
+    max_pairs: Optional[int] = None,
+) -> List[str]:
+    """Sample a stochastic bag of pairs, size scaled by model dimensions.
+
+    Bag size = _BAG_SIZE_SCALE.get(model_size, model_size * 3 / 4), clamped to
+    [min_pairs, max_pairs or len(filtered_pairs)].
+    """
+    if not filtered_pairs:
+        return []
+
+    target = _BAG_SIZE_SCALE.get(model_size, max(min_pairs, model_size * 3 // 4))
+    if max_pairs is not None:
+        target = min(target, max_pairs)
+    target = max(min_pairs, min(target, len(filtered_pairs)))
+
+    # Build adjacency for connected subgraph sampling
+    adj = _build_pair_adjacency(filtered_pairs)
+    return _select_related_pairs(filtered_pairs, adj, target, rng)
 
 
 def _build_pair_adjacency(all_pairs: List[str]) -> Dict[str, List[str]]:
@@ -168,20 +318,27 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
     return trial
 
 
-def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
+def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
+                     exchange: str = 'coinbase', pm_mode: str = 'single_asset'):
     """
-    Autoresearch with Square Cube Progression.
+    Autoresearch with Square Cube Progression + Stochastic Bag Sampling.
 
-    Starts with tiny HRM (hidden_size=4, H_layers=1, L_layers=1).
+    Starts with tiny HRM (hidden_size=4, H_layers=4, L_layers=4).
     Trains until plateau, then grows one dimension by 4× using rotational expansion.
+
+    Each iteration:
+      1. Load all available pairs from candle_cache (or fall back to graph.all_pairs)
+      2. Volatility filter: drop low-velocity and fiat-fiat pairs
+      3. Stochastic bag: randomly sample N pairs, size scaled by model dimensions
+      4. Stochastic time window: randomly sample (start_bar, end_bar)
 
     Growth cycle: h -> H -> L -> h (hidden_size leads, then layers catch up)
     Square sizes: 4 -> 16 -> 64 -> 256 (always powers of 4)
     """
     print("Using HRMEdgePredictor for hierarchical reasoning")
 
-    conn = duckdb.connect('candles.duckdb')
-    
+    conn = duckdb.connect(db_path)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS experiments (
             timestamp TIMESTAMP DEFAULT now(),
@@ -195,27 +352,49 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
     best_bpb = float('inf')
     best_params = None
 
-    adj = _build_pair_adjacency(graph.all_pairs)
     total_bars = len(graph.common_timestamps)
-    total_pairs = len(graph.all_pairs)
     rng = random.Random()
 
-    MIN_PAIRS = max(4, total_pairs // 8)
-    MAX_PAIRS = total_pairs
+    # --- Stochastic bag: load all available pairs from DB, then volatility-filter ---
+    all_db_pairs = _list_all_binance_pairs(db_path)
+    if all_db_pairs:
+        print(f"[StochasticBag] Found {len(all_db_pairs)} pairs in candle_cache")
+        filtered_pairs = _compute_volatility_filter(
+            db_path, all_db_pairs,
+            lookback_days=365 if exchange == "coinbase" else 1095,
+            granularity="300",
+            min_velocity=0.001,
+        )
+        print(f"[StochasticBag] After volatility filter: {len(filtered_pairs)} pairs")
+    else:
+        # Fallback to graph.all_pairs (from bag.json)
+        filtered_pairs = list(graph.all_pairs)
+        print(f"[StochasticBag] No DB pairs found, using graph.all_pairs ({len(filtered_pairs)} pairs)")
+
+    if not filtered_pairs:
+        print("[StochasticBag] ERROR: no pairs available after filtering")
+        return None
+
+    total_pool = len(filtered_pairs)
+    MIN_PAIRS = 5
+    MAX_PAIRS = total_pool
     MIN_WINDOW_BARS = max(200, total_bars // 20)
     MAX_WINDOW_BARS = total_bars
 
     # Square cube state
     growth_idx = 0  # index into GROWTH_CYCLE
     hidden_size = SQUARE_CUBE_SIZES[0]  # start at 4
-    H_layers = 1
-    L_layers = 1
+    H_layers = SQUARE_CUBE_SIZES[0]
+    L_layers = SQUARE_CUBE_SIZES[0]
     current_h_dim = hidden_size
     phase = 0
 
-    print(f"\nAutoresearch: {total_pairs} pairs, {total_bars} bars")
+    _validate_square_cube_state(hidden_size, H_layers, L_layers)
+
+    print(f"\nAutoresearch: {total_pool} filtered pairs, {total_bars} bars")
     print(f"Square Cube: hidden_size={hidden_size}, H_layers={H_layers}, L_layers={L_layers}")
-    print(f"Curriculum: pairs [{MIN_PAIRS}..{MAX_PAIRS}], window [{MIN_WINDOW_BARS}..{MAX_WINDOW_BARS}]")
+    print(f"Bag scaling: 4->5, 16->20, 64->40, 256->80 pairs")
+    print(f"Window: [{MIN_WINDOW_BARS}..{MAX_WINDOW_BARS}] bars")
     print("Press Ctrl+C to stop.\n")
 
     try:
@@ -223,10 +402,11 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
             phase += 1
             progress = min(1.0, phase / 200.0)
 
-            # Bag progression (unchanged)
-            pair_ceil = int(MIN_PAIRS + (MAX_PAIRS - MIN_PAIRS) * progress)
-            n_pairs = rng.randint(MIN_PAIRS, max(MIN_PAIRS, pair_ceil))
-            selected_pairs = _select_related_pairs(graph.all_pairs, adj, n_pairs, rng)
+            # --- Stochastic bag sampling scaled by current model size ---
+            selected_pairs = _stochastic_bag_sample(
+                filtered_pairs, current_h_dim, rng,
+                min_pairs=MIN_PAIRS, max_pairs=MAX_PAIRS,
+            )
             n_pairs = len(selected_pairs)
 
             window_ceil = int(MIN_WINDOW_BARS + (MAX_WINDOW_BARS - MIN_WINDOW_BARS) * progress)
@@ -311,40 +491,24 @@ def run_autoresearch(graph: CoinGraph, pm_mode: str = 'single_asset'):
                 old_H = H_layers
                 old_L = L_layers
 
-                # Grow next dimension in cycle
-                if growth_dim == 'h':
-                    # hidden_size leads: find next size
-                    if hidden_size in SQUARE_CUBE_SIZES:
-                        idx = SQUARE_CUBE_SIZES.index(hidden_size)
-                        if idx + 1 < len(SQUARE_CUBE_SIZES):
-                            hidden_size = SQUARE_CUBE_SIZES[idx + 1]
-                            current_h_dim = hidden_size
-                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
-                        else:
-                            # Max size reached, just rotate layers
-                            growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
-                    else:
-                        # Interpolate: grow to next power of 4
-                        hidden_size = hidden_size * 4
-                        current_h_dim = hidden_size
-                        growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
-                    model.grow('h')
-                elif growth_dim == 'H':
-                    H_layers = H_layers * 2 if H_layers < 8 else H_layers + 1
-                    model.grow('H')
-                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
-                elif growth_dim == 'L':
-                    L_layers = L_layers * 2 if L_layers < 8 else L_layers + 1
-                    model.grow('L')
-                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                hidden_size, H_layers, L_layers, did_grow = _apply_growth_step(
+                    model, growth_dim, hidden_size, H_layers, L_layers
+                )
+                current_h_dim = hidden_size
 
-                print(f"\n  *** CONVERGED -> GROWTH: {growth_dim} {old_h}x{old_h}x{old_h} -> {current_h_dim}x{current_h_dim}x{current_h_dim} [H={H_layers}, L={L_layers}]")
-                
-                # Save grown model state for next phase
-                model.save("model_weights_grown.pt")
-            else:
-                # Not converged, shuffle growth index to try different dimension
-                growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                if did_grow:
+                    growth_idx = (growth_idx + 1) % len(GROWTH_CYCLE)
+                    print(
+                        f"\n  *** CONVERGED -> GROWTH: {growth_dim} "
+                        f"[h={old_h}, H={old_H}, L={old_L}] -> "
+                        f"[h={current_h_dim}, H={H_layers}, L={L_layers}]"
+                    )
+                    model.save("model_weights_grown.pt")
+                else:
+                    print(
+                        f"\n  *** CONVERGED -> NO GROWTH: {growth_dim} already at max "
+                        f"[h={current_h_dim}, H={H_layers}, L={L_layers}]"
+                    )
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -401,13 +565,87 @@ def main():
     model.register_edges(list(graph.edges.keys()))
     model.load("model_weights.pt")
 
+    db_path = str(Config.DB_PATH)
+
     if args.autoresearch:
-        run_autoresearch(graph)
+        run_autoresearch(graph, db_path=db_path, exchange=args.exchange)
     else:
+        # Stochastic bag sampling for single training run (Binance mode)
+        if args.exchange == "binance":
+            all_db_pairs = _list_all_binance_pairs(db_path)
+            if all_db_pairs:
+                filtered = _compute_volatility_filter(
+                    db_path, all_db_pairs,
+                    lookback_days=1095, granularity="300", min_velocity=0.001,
+                )
+                print(f"[StochasticBag] Volatility-filtered: {len(filtered)} pairs (from {len(all_db_pairs)})")
+                if filtered:
+                    rng = random.Random()
+                    sampled = _stochastic_bag_sample(
+                        filtered, args.h_dim, rng,
+                        min_pairs=5, max_pairs=len(filtered),
+                    )
+                    if sampled:
+                        print(f"[StochasticBag] Sampled {len(sampled)} pairs for training")
+                        # Rebuild graph with sampled pairs only
+                        graph = CoinGraph(fee_rate=0.001)
+                        graph.load(
+                            lookback_days=1095,
+                            min_partners=args.min_partners,
+                            max_partners=args.max_partners,
+                            exchange=args.exchange,
+                            skip_fetch=True,
+                        )
+                        # Filter graph edges to sampled pairs only
+                        sampled_set = set(sampled)
+                        pair_to_edges = {}
+                        for pid in graph.all_pairs:
+                            parts = pid.split("-", 1)
+                            if len(parts) == 2:
+                                pair_to_edges[pid] = (parts[0], parts[1])
+                        from coin_graph import EdgeState, NodeState
+                        new_edges = {}
+                        new_edge_state = {}
+                        new_nodes = set()
+                        new_node_state = {}
+                        for pid in sampled:
+                            if pid not in pair_to_edges:
+                                continue
+                            base, quote = pair_to_edges[pid]
+                            for edge in [(base, quote), (quote, base)]:
+                                if edge in graph.edges:
+                                    new_edges[edge] = graph.edges[edge]
+                                    new_edge_state[edge] = EdgeState()
+                            new_nodes.add(base)
+                            new_nodes.add(quote)
+                            new_node_state.setdefault(base, NodeState())
+                            new_node_state.setdefault(quote, NodeState())
+                        if new_edges:
+                            graph.edges = new_edges
+                            graph.edge_state = new_edge_state
+                            graph.nodes = new_nodes
+                            graph.node_state = new_node_state
+                            graph.all_pairs = sampled
+                            graph._align_timestamps()
+                            n_bars = len(graph.common_timestamps)
+                            # Re-register model edges
+                            model = HierarchicalReasoningModel(
+                                n_edges=len(graph.edges),
+                                learning_rate=args.lr,
+                                y_depth=args.y_depth,
+                                x_pixels=args.x_pixels,
+                                curvature=args.curvature,
+                                h_dim=args.h_dim,
+                                z_dim=args.z_dim,
+                                prediction_depth=args.prediction_depth,
+                            )
+                            model.register_edges(list(graph.edges.keys()))
+                            model.load("model_weights.pt")
+
         loss_history = []
         end_bar = args.end_bar if args.end_bar else min(n_bars, 10000)
         print(f"Training from bar {args.start_bar} to {end_bar}...")
-        
+
         total_loss, n_updates, _, loss_history = run_training(
             graph, model,
             start_bar=args.start_bar,
@@ -415,7 +653,7 @@ def main():
             print_every=args.print_every,
             loss_history=loss_history
         )
-        
+
         avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
         print(f"\nDone: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
         model.save("model_weights.pt")
