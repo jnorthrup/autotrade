@@ -149,7 +149,7 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
 def _list_all_binance_pairs(db_path: str) -> List[str]:
     """List all Binance-style pairs available in candle_cache (DuckDB)."""
     try:
-        with duckdb.connect(db_path, read_only=True) as conn:
+        with duckdb.connect(db_path) as conn:
             rows = conn.execute("SELECT DISTINCT product_id FROM candles").fetchall()
             pairs = [r[0] for r in rows]
             # Filter: must look like BASE-QUOTE with two parts
@@ -181,7 +181,7 @@ def _compute_volatility_filter(
     start = end - timedelta(days=lookback_days)
 
     filtered = []
-    with duckdb.connect(db_path, read_only=True) as conn:
+    with duckdb.connect(db_path) as conn:
         for pid in all_pairs:
             parts = pid.split("-", 1)
             if len(parts) != 2:

@@ -610,9 +610,10 @@ class HierarchicalReasoningModel:
     def get_hrm_stats(self) -> List[Dict]:
         return []
 
-    def save(self, path: str = "model_weights.pt"):
+    def save(self, path: str = "model_weights.pt", checkpoint_type: str = "pretrained"):
         if self._model is None:
             return
+        from datetime import datetime
         state = {
             'model': self._model.state_dict(),
             'x_pixels': self.x_pixels,
@@ -625,6 +626,8 @@ class HierarchicalReasoningModel:
             'L_layers': self.L_layers,
             'H_cycles': self.H_cycles,
             'L_cycles': self.L_cycles,
+            'checkpoint_timestamp': datetime.now().isoformat(),
+            'checkpoint_type': checkpoint_type,
         }
         torch.save(state, path)
 
