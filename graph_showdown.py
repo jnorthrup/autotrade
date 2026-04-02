@@ -75,6 +75,7 @@ PLATEAU_PATIENCE = 3
 GROWTH_CYCLE = ['h', 'H', 'L']
 DEFAULT_TRAINING_DB_PATH = "training.duckdb"
 WALK_FORWARD_VALIDATION_FRACTION = 0.2
+DRAWTHROUGH_MAX_PASSES = 6
 
 
 def _next_square_cube_size(size: int) -> Optional[int]:
@@ -497,14 +498,16 @@ def _bag_surface_state(
     return surface_df, status_df, common_support_df, missing, common_timestamps
 
 
-def _group_fragment_fetch_windows(fragments_df: pd.DataFrame) -> List[Tuple[datetime, datetime, List[str]]]:
+def _group_fragment_fetch_windows(
+    fragments_df: pd.DataFrame,
+) -> List[Tuple[datetime, datetime, List[Dict[str, str]]]]:
     if fragments_df.empty:
         return []
 
-    windows: List[Tuple[datetime, datetime, List[str]]] = []
+    windows: List[Tuple[datetime, datetime, List[Dict[str, str]]]] = []
     current_start: Optional[pd.Timestamp] = None
     current_end: Optional[pd.Timestamp] = None
-    current_pairs: set = set()
+    current_pairs: set[Tuple[str, str]] = set()
 
     ordered = fragments_df.sort_values(
         ["fragment_start", "fragment_end", "exchange", "product_id"]
@@ -512,39 +515,68 @@ def _group_fragment_fetch_windows(fragments_df: pd.DataFrame) -> List[Tuple[date
     for row in ordered.itertuples(index=False):
         frag_start = pd.Timestamp(row.fragment_start)
         frag_end = pd.Timestamp(row.fragment_end)
+        exchange = str(row.exchange)
         product_id = str(row.product_id)
+        pair_key = (exchange, product_id)
 
         if current_start is None or current_end is None:
             current_start = frag_start
             current_end = frag_end
-            current_pairs = {product_id}
+            current_pairs = {pair_key}
             continue
 
         if frag_start <= current_end:
             current_end = max(current_end, frag_end)
-            current_pairs.add(product_id)
+            current_pairs.add(pair_key)
             continue
 
         windows.append(
             (
                 current_start.to_pydatetime(),
                 current_end.to_pydatetime(),
-                sorted(current_pairs),
+                [
+                    {"exchange": pair_exchange, "product_id": pair_product_id}
+                    for pair_exchange, pair_product_id in sorted(current_pairs)
+                ],
             )
         )
         current_start = frag_start
         current_end = frag_end
-        current_pairs = {product_id}
+        current_pairs = {pair_key}
 
     if current_start is not None and current_end is not None:
         windows.append(
             (
                 current_start.to_pydatetime(),
                 current_end.to_pydatetime(),
-                sorted(current_pairs),
+                [
+                    {"exchange": pair_exchange, "product_id": pair_product_id}
+                    for pair_exchange, pair_product_id in sorted(current_pairs)
+                ],
             )
         )
     return windows
+
+
+def _fragment_signature(fragments_df: pd.DataFrame) -> Tuple[Tuple[str, str, int, int, int], ...]:
+    if fragments_df.empty:
+        return ()
+
+    signature: List[Tuple[str, str, int, int, int]] = []
+    ordered = fragments_df.sort_values(
+        ["fragment_start", "fragment_end", "exchange", "product_id"]
+    )
+    for row in ordered.itertuples(index=False):
+        signature.append(
+            (
+                str(row.exchange),
+                str(row.product_id),
+                pd.Timestamp(row.fragment_start).value,
+                pd.Timestamp(row.fragment_end).value,
+                int(row.missing_count),
+            )
+        )
+    return tuple(signature)
 
 
 def _drawthrough_repair_window(
@@ -556,48 +588,115 @@ def _drawthrough_repair_window(
     end: datetime,
     granularity: str = "300",
     label: str = "drawthrough",
+    max_passes: int = DRAWTHROUGH_MAX_PASSES,
 ) -> None:
     window_start = _floor_time_to_granularity(start, granularity)
     window_end = _floor_time_to_granularity(end, granularity)
     if window_start >= window_end:
         return
 
-    fragments_view = cache.materialize_bag_missing_fragments_view(
+    previous_signature: Tuple[Tuple[str, str, int, int, int], ...] = ()
+    for pass_idx in range(1, max(max_passes, 1) + 1):
+        fragments_view = cache.materialize_bag_missing_fragments_view(
+            subscriptions,
+            window_start,
+            window_end,
+            granularity=granularity,
+        )
+        fragments_df = cache.read_bag_missing_fragments(fragments_view)
+        if fragments_df.empty:
+            if pass_idx == 1:
+                print(
+                    f"[Coinbase week/live] {label} perfect "
+                    f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+                )
+            else:
+                print(
+                    f"[Coinbase week/live] {label} perfected "
+                    f"passes={pass_idx - 1} "
+                    f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+                )
+            return
+
+        signature = _fragment_signature(fragments_df)
+        missing_bars = int(fragments_df["missing_count"].sum())
+        fragment_windows = _group_fragment_fetch_windows(fragments_df)
+        straggler_groups = sum(
+            1 for _, _, group_subscriptions in fragment_windows
+            if len(group_subscriptions) < len(subscriptions)
+        )
+        print(
+            f"[Coinbase week/live] {label} "
+            f"pass={pass_idx}/{max(max_passes, 1)} "
+            f"fragments={len(fragments_df)} "
+            f"missing_bars={missing_bars} "
+            f"groups={len(fragment_windows)} "
+            f"stragglers={straggler_groups} "
+            f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+        )
+
+        if signature == previous_signature:
+            print(
+                f"[Coinbase week/live] {label} stalled "
+                f"remaining_fragments={len(fragments_df)} "
+                f"remaining_missing_bars={missing_bars}"
+            )
+            return
+        previous_signature = signature
+
+        fetched_any = False
+        for fetch_start_dt, fetch_end_dt, fetch_subscriptions in fragment_windows:
+            if fetch_start_dt >= fetch_end_dt or not fetch_subscriptions:
+                continue
+            fetch_pairs = [
+                str(sub["product_id"])
+                for sub in fetch_subscriptions
+                if str(sub["exchange"]) == exchange
+            ]
+            if not fetch_pairs:
+                continue
+            fetched_any = True
+            print(
+                f"[Coinbase week/live] {label} fetch "
+                f"pairs={len(fetch_pairs)} "
+                f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(fetch_end_dt)}"
+            )
+            cache.backfill_http(
+                fetch_pairs,
+                fetch_start_dt,
+                fetch_end_dt,
+                granularity,
+                exchange=exchange,
+            )
+
+        if not fetched_any:
+            print(
+                f"[Coinbase week/live] {label} no-fetch "
+                f"remaining_fragments={len(fragments_df)} "
+                f"remaining_missing_bars={missing_bars}"
+            )
+            return
+
+    final_view = cache.materialize_bag_missing_fragments_view(
         subscriptions,
         window_start,
         window_end,
         granularity=granularity,
     )
-    fragments_df = cache.read_bag_missing_fragments(fragments_view)
-    if fragments_df.empty:
+    final_fragments_df = cache.read_bag_missing_fragments(final_view)
+    if final_fragments_df.empty:
         print(
-            f"[Coinbase week/live] {label} perfect "
+            f"[Coinbase week/live] {label} perfected "
+            f"passes={max(max_passes, 1)} "
             f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
         )
         return
-
-    fragment_windows = _group_fragment_fetch_windows(fragments_df)
     print(
-        f"[Coinbase week/live] {label} fragments="
-        f"{len(fragments_df)} groups={len(fragment_windows)} "
-        f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+        f"[Coinbase week/live] {label} incomplete "
+        f"after_passes={max(max_passes, 1)} "
+        f"remaining_fragments={len(final_fragments_df)} "
+        f"remaining_missing_bars={int(final_fragments_df['missing_count'].sum())}"
     )
-
-    for fetch_start_dt, fetch_end_dt, fetch_pairs in fragment_windows:
-        if fetch_start_dt >= fetch_end_dt:
-            continue
-        print(
-            f"[Coinbase week/live] {label} fetch "
-            f"pairs={len(fetch_pairs)} "
-            f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(fetch_end_dt)}"
-        )
-        cache.backfill_http(
-            fetch_pairs,
-            fetch_start_dt,
-            fetch_end_dt,
-            granularity,
-            exchange=exchange,
-        )
 
 
 def _surface_union_timestamps(surface_df: pd.DataFrame) -> List[pd.Timestamp]:
