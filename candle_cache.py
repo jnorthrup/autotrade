@@ -703,6 +703,48 @@ class CandleCache:
                     conn.register("df", df)
                     conn.execute("INSERT OR REPLACE INTO candles SELECT * FROM df")
 
+    def _count_new_candle_keys(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        key_df = (
+            df[["exchange", "product_id", "timestamp", "granularity"]]
+            .copy()
+            .dropna(subset=["exchange", "product_id", "timestamp", "granularity"])
+            .drop_duplicates(subset=["exchange", "product_id", "timestamp", "granularity"], keep="last")
+        )
+        if key_df.empty:
+            return 0
+
+        batch_size = 500
+        total_new = 0
+        for offset in range(0, len(key_df), batch_size):
+            chunk = key_df.iloc[offset:offset + batch_size]
+            values_sql = ", ".join(
+                f"({_sql_escape(row.exchange)}, {_sql_escape(row.product_id)}, {_sql_escape(pd.Timestamp(row.timestamp))}, {_sql_escape(row.granularity)})"
+                for row in chunk.itertuples(index=False)
+            )
+            sql = f"""
+                WITH incoming(exchange, product_id, timestamp, granularity) AS (
+                    VALUES {values_sql}
+                )
+                SELECT COUNT(*)::BIGINT AS new_rows
+                FROM incoming AS i
+                LEFT JOIN candles AS c
+                  ON c.exchange = i.exchange
+                 AND c.product_id = i.product_id
+                 AND c.timestamp = i.timestamp
+                 AND c.granularity = i.granularity
+                WHERE c.exchange IS NULL
+            """
+            if _use_pool(self.db_path):
+                rows = _pool().execute(sql)
+                total_new += int(rows[0][0]) if rows else 0
+            else:
+                with duckdb.connect(self.db_path) as conn:
+                    row = conn.execute(sql).fetchone()
+                    total_new += int(row[0]) if row and row[0] is not None else 0
+        return total_new
+
     def _save_candles_via_pool(self, df: pd.DataFrame):
         """Upsert candles through the pool server using batch INSERT."""
         p = _pool()
@@ -2368,7 +2410,7 @@ class CandleCache:
         api_gran: str,
         granularity: str,
         protocol_label: str = "HTTP backfill",
-    ) -> int:
+    ) -> Dict[str, int]:
         try:
             self._bucket.acquire()
             resp = self.client.get_public_candles(
@@ -2378,7 +2420,7 @@ class CandleCache:
                 granularity=api_gran,
             )
             if not (hasattr(resp, 'candles') and resp.candles):
-                return 0
+                return {"rate_limited": 0, "rows_returned": 0, "rows_inserted": 0}
             rows = [{
                 'exchange': exchange,
                 'product_id': product_id,
@@ -2388,13 +2430,18 @@ class CandleCache:
                 'volume': float(c.volume), 'granularity': granularity,
             } for c in resp.candles]
             df = pd.DataFrame(rows)
+            rows_inserted = self._count_new_candle_keys(df)
             self.save_candles(df)
-            return len(rows)
+            return {
+                "rate_limited": 0,
+                "rows_returned": len(rows),
+                "rows_inserted": rows_inserted,
+            }
         except Exception as e:
             if "429" in str(e) or "Too Many" in str(e):
-                return -1
+                return {"rate_limited": 1, "rows_returned": 0, "rows_inserted": 0}
             print(f"  [{protocol_label}][{exchange}][{product_id}] chunk error: {e}")
-            return 0
+            return {"rate_limited": 0, "rows_returned": 0, "rows_inserted": 0}
 
     def _fetch_and_save(
         self,
@@ -2423,6 +2470,7 @@ class CandleCache:
             cur += timedelta(seconds=chunk_sec)
 
         total = 0
+        total_new = 0
         skipped = 0
         i = 0
         while i < len(chunks):
@@ -2446,14 +2494,16 @@ class CandleCache:
                 granularity,
                 protocol_label=protocol_label,
             )
-            if result == -1:
+            if int(result.get("rate_limited", 0)):
                 self._note_rate_limit(exchange, product_id, protocol_label)
             else:
-                total += result
+                total += int(result.get("rows_returned", 0))
+                total_new += int(result.get("rows_inserted", 0))
                 i += 1
 
         print(
-            f"  [{protocol_label}][{exchange}][{product_id}] {total} candles saved, "
+            f"  [{protocol_label}][{exchange}][{product_id}] "
+            f"{total} rows returned, {total_new} new, "
             f"{skipped}/{len(chunks)} chunks skipped (cached), "
             f"window={_utc_isoformat(aligned_start)} -> {_utc_isoformat(aligned_end)}"
         )
