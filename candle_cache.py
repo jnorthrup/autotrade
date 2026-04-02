@@ -2797,11 +2797,15 @@ class CandleCache:
                     if pid not in pair_set:
                         continue
                     try:
+                        ts = _parse_candle_timestamp(candle["start"])
+                        expected_gran_seconds = int(granularity)
+                        if int(ts.timestamp()) % expected_gran_seconds != 0:
+                            continue
                         rows.append(
                             {
                                 "exchange": exchange,
                                 "product_id": pid,
-                                "timestamp": _parse_candle_timestamp(candle["start"]),
+                                "timestamp": ts,
                                 "open": float(candle["open"]),
                                 "high": float(candle["high"]),
                                 "low": float(candle["low"]),
