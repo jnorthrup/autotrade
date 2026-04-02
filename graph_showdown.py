@@ -22,7 +22,13 @@ from coin_graph import (
     DEFAULT_MIN_PAIR_COVERAGE,
 )
 from config import Config
-from candle_cache import CandleCache, _floor_time_to_granularity, _utc_isoformat, _utc_now_naive
+from candle_cache import (
+    CandleCache,
+    WS_SNAPSHOT_TARGET_CANDLES,
+    _floor_time_to_granularity,
+    _utc_isoformat,
+    _utc_now_naive,
+)
 
 import duckdb
 from pool_client import PoolClient, pool_is_running
@@ -52,6 +58,11 @@ def _pool() -> PoolClient:
     if _pool_client_instance is None:
         _pool_client_instance = PoolClient()
     return _pool_client_instance
+
+
+def _resolve_experiments_db_path(training_db_path: Optional[str]) -> str:
+    """Keep experiment metadata out of the live candle cache by default."""
+    return str(Path(training_db_path or DEFAULT_TRAINING_DB_PATH))
 
 # Square cube progression: hidden_size, always powers of 4
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
@@ -486,6 +497,76 @@ def _bag_surface_state(
     return surface_df, status_df, common_support_df, missing, common_timestamps
 
 
+def _repair_recent_pair_tails(
+    cache: CandleCache,
+    subscriptions: List[Dict[str, str]],
+    *,
+    exchange: str,
+    end: datetime,
+    granularity: str = "300",
+    distance_bars: int = 6,
+) -> None:
+    distance_bars = max(int(distance_bars), 1)
+    gran_sec = int(granularity)
+    window_end = _floor_time_to_granularity(end, granularity)
+    window_start = window_end - timedelta(seconds=gran_sec * distance_bars)
+    repair_view = cache.materialize_bag_repair_status_view(
+        subscriptions,
+        window_start,
+        window_end,
+        granularity=granularity,
+    )
+    repair_df = cache.read_bag_repair_status(repair_view)
+    if repair_df.empty:
+        print(
+            f"[Coinbase week/live] recent-tail repair view empty "
+            f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+        )
+        return
+
+    repair_df = repair_df.copy()
+    repair_df["needs_fetch"] = repair_df["needs_fetch"].astype(bool)
+    need_df = repair_df[repair_df["needs_fetch"]]
+    if need_df.empty:
+        print(
+            f"[Coinbase week/live] recent-tail repair clean "
+            f"distance_bars={distance_bars} need_fetch=0/{len(repair_df)} "
+            f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+        )
+        return
+
+    kind_counts = ", ".join(
+        f"{kind}={count}"
+        for kind, count in need_df["fetch_kind"].value_counts().sort_index().items()
+    )
+    print(
+        f"[Coinbase week/live] recent-tail repair "
+        f"distance_bars={distance_bars} need_fetch={len(need_df)}/{len(repair_df)} "
+        f"kinds={kind_counts} "
+        f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+    )
+
+    for fetch_start, group in need_df.groupby("fetch_start", sort=True):
+        if pd.isna(fetch_start):
+            fetch_start = window_start
+        fetch_pairs = [str(pid) for pid in group["product_id"].tolist()]
+        fetch_start_dt = pd.Timestamp(fetch_start).to_pydatetime()
+        if fetch_start_dt >= window_end:
+            continue
+        print(
+            f"[Coinbase week/live] recent-tail fetch "
+            f"pairs={len(fetch_pairs)} "
+            f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(window_end)}"
+        )
+        cache.backfill_http(
+            fetch_pairs,
+            fetch_start_dt,
+            window_end,
+            granularity,
+            exchange=exchange,
+        )
+
+
 def _surface_union_timestamps(surface_df: pd.DataFrame) -> List[pd.Timestamp]:
     if surface_df.empty or "timestamp" not in surface_df.columns:
         return []
@@ -540,8 +621,6 @@ def _load_selected_pair_graph(
     cache = CandleCache(str(Config.DB_PATH))
     graph = CoinGraph(fee_rate=fee_rate, min_pair_coverage=min_pair_coverage)
     graph.cache = cache
-    graph.bag_id = None
-    graph.bag_window_id = None
     graph.bag_surface_name = None
     graph.bag_thresholds_view_name = None
     surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
@@ -558,7 +637,6 @@ def _load_selected_pair_graph(
         )
     if surface_df.empty:
         raise RuntimeError("No candle data available for the requested bag surface")
-    graph.bag_window_id = None
 
     expected = max(1, int((end - start).total_seconds() // int(granularity)))
     counts_by_key = {
@@ -799,7 +877,7 @@ def _list_all_binance_pairs(db_path: str) -> List[str]:
             rows = _pool().execute("SELECT DISTINCT product_id FROM candles WHERE exchange = 'binance'")
             pairs = [r[0] for r in rows]
         else:
-            with duckdb.connect(db_path) as conn:
+            with duckdb.connect(db_path, read_only=True) as conn:
                 rows = conn.execute("SELECT DISTINCT product_id FROM candles WHERE exchange = 'binance'").fetchall()
                 pairs = [r[0] for r in rows]
         # Filter: must look like BASE-QUOTE with two parts
@@ -850,7 +928,7 @@ def _list_all_exchange_subscriptions(db_path: str, exchange: Optional[str] = Non
                 )
             rows = list(rows)
         else:
-            with duckdb.connect(db_path) as conn:
+            with duckdb.connect(db_path, read_only=True) as conn:
                 if exchange is None:
                     rows = conn.execute("SELECT DISTINCT exchange, product_id FROM candles").fetchall()
                 else:
@@ -930,7 +1008,7 @@ def _compute_volatility_filter(
             if mean_vel >= min_velocity:
                 filtered.append(original)
     else:
-        with duckdb.connect(db_path) as conn:
+        with duckdb.connect(db_path, read_only=True) as conn:
             for original, sub in normalized_inputs:
                 pid = sub["product_id"]
                 exchange = sub["exchange"]
@@ -1116,14 +1194,14 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
     """
     print("Using HRMEdgePredictor for hierarchical reasoning")
 
-    use_pool_flag = _use_pool()
-    pool = _pool() if use_pool_flag else None
-
-    if use_pool_flag:
-        _ensure_experiments_table(pool)
-    else:
-        conn = duckdb.connect(db_path)
-        _ensure_experiments_table(conn)
+    experiments_db_path = _resolve_experiments_db_path(training_db_path)
+    if Path(experiments_db_path).resolve() == Path(db_path).resolve():
+        print(
+            "[Autoresearch] WARNING: experiments DB shares the candle cache path; "
+            "this can block live candle writes."
+        )
+    conn = duckdb.connect(experiments_db_path)
+    _ensure_experiments_table(conn)
 
     best_bpb = float('inf')
     best_params = None
@@ -1361,10 +1439,7 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
                 " VALUES (now(), ?, ?, ?, ?, ?)"
             )
             _insert_params = [val_bpb, str(params), str(bag_spec), growth_dim, model_cas]
-            if use_pool_flag:
-                pool.execute(_insert_sql, _insert_params)
-            else:
-                conn.execute(_insert_sql, _insert_params)
+            conn.execute(_insert_sql, _insert_params)
 
             # Check for convergence and trigger growth
             if _is_converged(loss_history):
@@ -1402,6 +1477,8 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
+    finally:
+        conn.close()
 
     if best_params:
         print(f"Best: val_bpb={best_bpb:.6f} with {best_params}")
@@ -1493,7 +1570,18 @@ def run_coinbase_week_http_then_live(
         if exchange != "coinbase":
             raise NotImplementedError(f"Unsupported exchange in bag: {exchange}")
 
-        _surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
+        print(
+            f"[Coinbase week/live] ws snapshot seed "
+            f"pairs={len(pairs)} target_bars={WS_SNAPSHOT_TARGET_CANDLES}"
+        )
+        cache.ws_snapshot(
+            pairs,
+            granularity=granularity,
+            exchange=exchange,
+            target_candles=WS_SNAPSHOT_TARGET_CANDLES,
+        )
+
+        _surface_df, _status_df, _common_support_df, missing_subscriptions, _common_timestamps = _bag_surface_state(
             cache,
             subs,
             initial_start,
@@ -1513,7 +1601,7 @@ def run_coinbase_week_http_then_live(
                 granularity,
                 exchange=exchange,
             )
-            _surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
+            _surface_df, _status_df, _common_support_df, missing_subscriptions, _common_timestamps = _bag_surface_state(
                 cache,
                 subs,
                 initial_start,
@@ -1521,35 +1609,14 @@ def run_coinbase_week_http_then_live(
                 granularity=granularity,
             )
 
-        gran_sec = int(granularity)
-        overlap_bars = max(live_http_overlap_candles, 1)
-        if common_timestamps:
-            latest_common = common_timestamps[-1]
-            fetch_start = max(
-                initial_start,
-                latest_common - timedelta(seconds=gran_sec * overlap_bars),
-            )
-            print(
-                f"[Coinbase week/live] drawthrough "
-                f"common_bars={len(common_timestamps)} "
-                f"latest_common={_utc_isoformat(latest_common)} "
-                f"tail_fetch={_utc_isoformat(fetch_start)} -> {_utc_isoformat(initial_end)}"
-            )
-        else:
-            fetch_start = initial_start
-            print(
-                f"[Coinbase week/live] drawthrough has no whole-bag common watermark; "
-                f"falling back to full-window fetch {_utc_isoformat(initial_start)} -> {_utc_isoformat(initial_end)}"
-            )
-
-        if fetch_start < initial_end:
-            cache.backfill_http(
-                pairs,
-                fetch_start,
-                initial_end,
-                granularity,
-                exchange=exchange,
-            )
+        _repair_recent_pair_tails(
+            cache,
+            subs,
+            exchange=exchange,
+            end=initial_end,
+            granularity=granularity,
+            distance_bars=max(live_http_overlap_candles, WS_SNAPSHOT_TARGET_CANDLES),
+        )
 
     graph = _load_selected_pair_graph(
         selected_subscriptions,

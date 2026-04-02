@@ -15,6 +15,8 @@ from config import Config
 from pool_client import PoolClient, pool_is_running, DEFAULT_SOCKET
 
 CHUNK_CANDLES = 350
+WS_SNAPSHOT_TARGET_CANDLES = 350
+WS_SNAPSHOT_SETTLE_SECONDS = 2.0
 INITIAL_WORKERS = 4
 MAX_RPS = 3.0
 HTTP_429_COOLDOWN_SECONDS = 15.0
@@ -62,7 +64,7 @@ def _expected_bucket_bounds(
 
 
 def _use_pool(db_path: Optional[str] = None) -> bool:
-    """True if literbike pool server is running and the canonical DB is in use."""
+    """True if the local pool server is running and the canonical DB is in use."""
     try:
         if not pool_is_running():
             return False
@@ -197,24 +199,18 @@ def _bag_digest(
     ).hexdigest()[:16]
 
 
-def _bag_definition_id(subscriptions: List[Dict[str, str]]) -> str:
-    keys = [f"{sub['exchange']}:{sub['product_id']}" for sub in _dedupe_subscriptions(subscriptions)]
-    return hashlib.sha1(
-        json.dumps({"subscriptions": sorted(keys)}, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:16]
-
-
-def _bag_window_id(
+def _bag_thresholds_view_name(
     subscriptions: List[Dict[str, str]],
     start: datetime,
     end: datetime,
     granularity: str,
     min_coverage_ratio: float = 0.0,
 ) -> str:
-    return hashlib.sha1(
+    keys = [f"{sub['exchange']}:{sub['product_id']}" for sub in _dedupe_subscriptions(subscriptions)]
+    digest = hashlib.sha1(
         json.dumps(
             {
-                "bag_id": _bag_definition_id(subscriptions),
+                "subscriptions": sorted(keys),
                 "start": pd.Timestamp(start).isoformat(),
                 "end": pd.Timestamp(end).isoformat(),
                 "granularity": str(granularity),
@@ -223,19 +219,21 @@ def _bag_window_id(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()[:16]
+    return f"bag_thresholds_{digest}"
 
 
-def _bag_surface_view_name_for_window(bag_window_id: str) -> str:
-    return f"bag_surface_{bag_window_id}"
+def _bag_surface_name_from_thresholds_view(thresholds_view_name: str) -> str:
+    digest = hashlib.sha1(thresholds_view_name.encode("utf-8")).hexdigest()[:16]
+    return f"bag_surface_{digest}"
 
-def _bag_thresholds_view_name(
+
+def _bag_repair_status_view_name(
     subscriptions: List[Dict[str, str]],
     start: datetime,
     end: datetime,
     granularity: str,
-    min_coverage_ratio: float = 0.0,
 ) -> str:
-    return f"bag_thresholds_{_bag_window_id(subscriptions, start, end, granularity, min_coverage_ratio)}"
+    return f"bag_repair_{_bag_digest(subscriptions, start, end, granularity)}"
 
 
 class _TokenBucket:
@@ -344,41 +342,6 @@ class CandleCache:
             "CREATE INDEX IF NOT EXISTS idx_candles_time ON candles(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_candles_exchange_time ON candles(exchange, timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_candles_exchange_prod_gran ON candles(exchange, product_id, granularity)",
-            """CREATE TABLE IF NOT EXISTS bags (
-                bag_id VARCHAR PRIMARY KEY,
-                bag_name VARCHAR,
-                created_at TIMESTAMP DEFAULT now()
-            )""",
-            """CREATE TABLE IF NOT EXISTS bag_members (
-                bag_id VARCHAR,
-                exchange VARCHAR,
-                product_id VARCHAR,
-                PRIMARY KEY (bag_id, exchange, product_id)
-            )""",
-            """CREATE TABLE IF NOT EXISTS bag_windows (
-                bag_window_id VARCHAR PRIMARY KEY,
-                bag_id VARCHAR,
-                window_start TIMESTAMP,
-                window_end TIMESTAMP,
-                granularity VARCHAR,
-                min_coverage_ratio DOUBLE,
-                created_at TIMESTAMP DEFAULT now()
-            )""",
-            """CREATE TABLE IF NOT EXISTS bag_member_status (
-                bag_window_id VARCHAR,
-                exchange VARCHAR,
-                product_id VARCHAR,
-                covered BOOLEAN,
-                expected_count BIGINT,
-                actual_count BIGINT,
-                coverage_ratio DOUBLE,
-                min_coverage_ratio DOUBLE,
-                meets_threshold BOOLEAN,
-                bad_gap_count BIGINT,
-                first_timestamp TIMESTAMP,
-                last_timestamp TIMESTAMP,
-                PRIMARY KEY (bag_window_id, exchange, product_id)
-            )""",
             """CREATE TABLE IF NOT EXISTS edge_params (
                 edge VARCHAR PRIMARY KEY,
                 curvature DOUBLE DEFAULT 2.0,
@@ -387,31 +350,6 @@ class CandleCache:
                 fee_rate DOUBLE DEFAULT 0.001,
                 updated_at TIMESTAMP DEFAULT now()
             )""",
-            """CREATE OR REPLACE VIEW bag_thresholds_v AS
-                SELECT
-                    bw.bag_window_id,
-                    bw.bag_id,
-                    b.bag_name,
-                    bw.window_start,
-                    bw.window_end,
-                    bw.granularity,
-                    bw.min_coverage_ratio,
-                    bms.exchange,
-                    bms.product_id,
-                    bms.covered,
-                    bms.expected_count,
-                    bms.actual_count,
-                    bms.coverage_ratio,
-                    bms.meets_threshold,
-                    bms.bad_gap_count,
-                    bms.first_timestamp,
-                    bms.last_timestamp
-                FROM bag_windows AS bw
-                JOIN bag_member_status AS bms
-                  ON bms.bag_window_id = bw.bag_window_id
-                LEFT JOIN bags AS b
-                  ON b.bag_id = bw.bag_id
-            """,
         ]
         if _use_pool(self.db_path):
             p = _pool()
@@ -1012,81 +950,6 @@ class CandleCache:
             )
         return statuses
 
-    def persist_bag_window_status(
-        self,
-        subscriptions: List[Dict[str, str]],
-        statuses: List[Dict[str, object]],
-        start: datetime,
-        end: datetime,
-        granularity: str = "300",
-        min_coverage_ratio: float = 0.0,
-        bag_name: Optional[str] = None,
-    ) -> Dict[str, str]:
-        deduped = _dedupe_subscriptions(subscriptions)
-        if not deduped:
-            raise ValueError("Cannot persist an empty bag")
-        bag_id = _bag_definition_id(deduped)
-        bag_window_id = _bag_window_id(
-            deduped,
-            start,
-            end,
-            granularity,
-            min_coverage_ratio=min_coverage_ratio,
-        )
-        safe_bag_name = bag_name or bag_id
-
-        member_values_sql = ", ".join(
-            f"({_sql_escape(bag_id)}, {_sql_escape(sub['exchange'])}, {_sql_escape(sub['product_id'])})"
-            for sub in deduped
-        )
-        status_values_sql = ", ".join(
-            "("
-            f"{_sql_escape(bag_window_id)}, "
-            f"{_sql_escape(status['exchange'])}, "
-            f"{_sql_escape(status['product_id'])}, "
-            f"{_sql_escape(bool(status['covered']))}, "
-            f"{int(status['expected_count'])}, "
-            f"{int(status['actual_count'])}, "
-            f"{float(status['coverage_ratio'])}, "
-            f"{float(min_coverage_ratio)}, "
-            f"{_sql_escape(float(status['coverage_ratio']) >= float(min_coverage_ratio))}, "
-            f"{int(status['bad_gap_count'])}, "
-            f"{_sql_escape(status['first_timestamp'])}, "
-            f"{_sql_escape(status['last_timestamp'])}"
-            ")"
-            for status in statuses
-        )
-        stmts = [
-            f"INSERT OR REPLACE INTO bags (bag_id, bag_name) VALUES ({_sql_escape(bag_id)}, {_sql_escape(safe_bag_name)})",
-            f"INSERT OR REPLACE INTO bag_members (bag_id, exchange, product_id) VALUES {member_values_sql}",
-            (
-                "INSERT OR REPLACE INTO bag_windows "
-                "(bag_window_id, bag_id, window_start, window_end, granularity, min_coverage_ratio) "
-                f"VALUES ({_sql_escape(bag_window_id)}, {_sql_escape(bag_id)}, {_sql_escape(start)}, "
-                f"{_sql_escape(end)}, {_sql_escape(granularity)}, {_sql_escape(float(min_coverage_ratio))})"
-            ),
-        ]
-        if status_values_sql:
-            stmts.append(
-                "INSERT OR REPLACE INTO bag_member_status "
-                "("
-                "bag_window_id, exchange, product_id, covered, expected_count, actual_count, "
-                "coverage_ratio, min_coverage_ratio, meets_threshold, bad_gap_count, "
-                "first_timestamp, last_timestamp"
-                f") VALUES {status_values_sql}"
-            )
-
-        if _use_pool(self.db_path):
-            p = _pool()
-            for stmt in stmts:
-                p.execute(stmt)
-        else:
-            with _db_lock:
-                with duckdb.connect(self.db_path) as conn:
-                    for stmt in stmts:
-                        conn.execute(stmt)
-        return {"bag_id": bag_id, "bag_window_id": bag_window_id}
-
     def materialize_bag_surface(
         self,
         subscriptions: List[Dict[str, str]],
@@ -1135,12 +998,12 @@ class CandleCache:
                     conn.execute(sql)
         return surface_name
 
-    def materialize_bag_surface_for_window(
+    def materialize_bag_surface_from_thresholds_view(
         self,
-        bag_window_id: str,
+        thresholds_view_name: str,
         surface_name: Optional[str] = None,
     ) -> str:
-        surface_name = surface_name or _bag_surface_view_name_for_window(bag_window_id)
+        surface_name = surface_name or _bag_surface_name_from_thresholds_view(thresholds_view_name)
         sql = f"""
             CREATE OR REPLACE VIEW {surface_name} AS
             SELECT
@@ -1154,17 +1017,14 @@ class CandleCache:
                 c.volume,
                 c.granularity
             FROM candles AS c
-            JOIN bag_member_status AS bms
-              ON bms.exchange = c.exchange
-             AND bms.product_id = c.product_id
-             AND bms.bag_window_id = {_sql_escape(bag_window_id)}
-            JOIN bag_windows AS bw
-              ON bw.bag_window_id = bms.bag_window_id
-            WHERE bms.covered
-              AND bms.meets_threshold
-              AND c.granularity = bw.granularity
-              AND c.timestamp >= bw.window_start
-              AND c.timestamp < bw.window_end
+            JOIN {thresholds_view_name} AS bt
+              ON bt.exchange = c.exchange
+             AND bt.product_id = c.product_id
+            WHERE bt.covered
+              AND bt.meets_threshold
+              AND c.granularity = bt.granularity
+              AND c.timestamp >= bt.window_start
+              AND c.timestamp < bt.window_end
             ORDER BY c.exchange, c.product_id, c.timestamp
         """
         if _use_pool(self.db_path):
@@ -1191,7 +1051,13 @@ class CandleCache:
         deduped = _dedupe_subscriptions(subscriptions)
         if not deduped:
             raise ValueError("Cannot materialize bag thresholds view with no subscriptions")
-        view_name = view_name or _bag_thresholds_view_name(deduped, start, end, granularity)
+        view_name = view_name or _bag_thresholds_view_name(
+            deduped,
+            start,
+            end,
+            granularity,
+            min_coverage_ratio=min_coverage_ratio,
+        )
         rows_sql = ", ".join(
             "("
             f"{_sql_escape(status['exchange'])}, "
@@ -1245,6 +1111,174 @@ class CandleCache:
                 with duckdb.connect(self.db_path) as conn:
                     conn.execute(sql)
         return view_name
+
+    def materialize_bag_repair_status_view(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        view_name: Optional[str] = None,
+    ) -> str:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot materialize bag repair status view with no subscriptions")
+
+        expected_first_ns, expected_last_ns, expected = _expected_bucket_bounds(start, end, granularity)
+        expected_first = None if expected <= 0 else _parse_candle_timestamp(expected_first_ns).to_pydatetime()
+        expected_last = None if expected <= 0 else _parse_candle_timestamp(expected_last_ns).to_pydatetime()
+        gran_sec = _granularity_seconds(granularity)
+        gran_ns = gran_sec * 1_000_000_000
+        view_name = view_name or _bag_repair_status_view_name(deduped, start, end, granularity)
+
+        values_sql = ", ".join(
+            f"({_sql_escape(sub['exchange'])}, {_sql_escape(sub['product_id'])})"
+            for sub in deduped
+        )
+        sql = f"""
+            CREATE OR REPLACE VIEW {view_name} AS
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            ),
+            ordered AS (
+                SELECT
+                    b.exchange,
+                    b.product_id,
+                    c.timestamp,
+                    epoch_ns(c.timestamp) AS ts_ns,
+                    LAG(epoch_ns(c.timestamp)) OVER (
+                        PARTITION BY b.exchange, b.product_id
+                        ORDER BY c.timestamp
+                    ) AS prev_ts_ns
+                FROM bag AS b
+                LEFT JOIN candles AS c
+                  ON c.exchange = b.exchange
+                 AND c.product_id = b.product_id
+                 AND c.granularity = {_sql_escape(granularity)}
+                 AND c.timestamp >= {_sql_escape(start)}
+                 AND c.timestamp < {_sql_escape(end)}
+            ),
+            agg AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    COUNT(timestamp)::BIGINT AS actual_count,
+                    MIN(timestamp) AS first_timestamp,
+                    MAX(timestamp) AS last_timestamp,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN prev_ts_ns IS NOT NULL AND ts_ns - prev_ts_ns != {gran_ns}
+                                    THEN 1
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::BIGINT AS bad_gap_count
+                FROM ordered
+                GROUP BY exchange, product_id
+            )
+            SELECT
+                exchange,
+                product_id,
+                {_sql_escape(start)}::TIMESTAMP AS window_start,
+                {_sql_escape(end)}::TIMESTAMP AS window_end,
+                {_sql_escape(granularity)}::VARCHAR AS granularity,
+                {int(expected)}::BIGINT AS expected_count,
+                actual_count,
+                CASE
+                    WHEN {int(expected)} <= 0 THEN 1.0
+                    ELSE LEAST(1.0, actual_count::DOUBLE / {float(max(expected, 1))})
+                END AS coverage_ratio,
+                bad_gap_count,
+                first_timestamp,
+                last_timestamp,
+                (
+                    actual_count = {int(expected)}
+                    AND first_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_first)}
+                    AND last_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_last)}
+                    AND bad_gap_count = 0
+                ) AS covered,
+                CASE
+                    WHEN actual_count = {int(expected)}
+                     AND first_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_first)}
+                     AND last_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_last)}
+                     AND bad_gap_count = 0
+                        THEN 'covered'
+                    WHEN actual_count = 0 OR first_timestamp IS NULL OR last_timestamp IS NULL
+                        THEN 'empty'
+                    WHEN first_timestamp IS DISTINCT FROM {_sql_escape(expected_first)}
+                        THEN 'head'
+                    WHEN bad_gap_count > 0
+                        THEN 'gap'
+                    WHEN last_timestamp IS DISTINCT FROM {_sql_escape(expected_last)}
+                        THEN 'tail'
+                    ELSE 'unknown'
+                END AS fetch_kind,
+                CASE
+                    WHEN actual_count = {int(expected)}
+                     AND first_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_first)}
+                     AND last_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_last)}
+                     AND bad_gap_count = 0
+                        THEN FALSE
+                    ELSE TRUE
+                END AS needs_fetch,
+                CASE
+                    WHEN actual_count = 0 OR first_timestamp IS NULL OR last_timestamp IS NULL
+                        THEN {_sql_escape(start)}::TIMESTAMP
+                    WHEN first_timestamp IS NOT DISTINCT FROM {_sql_escape(expected_first)}
+                     AND bad_gap_count = 0
+                     AND last_timestamp IS NOT NULL
+                        THEN GREATEST(
+                            last_timestamp + INTERVAL {gran_sec} SECOND,
+                            {_sql_escape(start)}::TIMESTAMP
+                        )
+                    ELSE {_sql_escape(start)}::TIMESTAMP
+                END AS fetch_start,
+                {_sql_escape(end)}::TIMESTAMP AS fetch_end
+            FROM agg
+            ORDER BY exchange, product_id
+        """
+        if _use_pool(self.db_path):
+            _pool().execute(sql)
+        else:
+            with _db_lock:
+                with duckdb.connect(self.db_path) as conn:
+                    conn.execute(sql)
+        return view_name
+
+    def read_bag_repair_status(self, view_name: str) -> pd.DataFrame:
+        sql = f"SELECT * FROM {view_name} ORDER BY exchange, product_id"
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql)
+            columns = [
+                "exchange",
+                "product_id",
+                "window_start",
+                "window_end",
+                "granularity",
+                "expected_count",
+                "actual_count",
+                "coverage_ratio",
+                "bad_gap_count",
+                "first_timestamp",
+                "last_timestamp",
+                "covered",
+                "fetch_kind",
+                "needs_fetch",
+                "fetch_start",
+                "fetch_end",
+            ]
+            df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        else:
+            with duckdb.connect(self.db_path) as conn:
+                df = conn.execute(sql).df()
+        if df.empty:
+            return df
+        df = df.copy()
+        for column in ("window_start", "window_end", "first_timestamp", "last_timestamp", "fetch_start", "fetch_end"):
+            df[column] = pd.to_datetime(df[column], errors="coerce")
+        return df
 
     def read_bag_surface(self, surface_name: str) -> pd.DataFrame:
         sql = f"SELECT * FROM {surface_name} ORDER BY exchange, product_id, timestamp"
@@ -1816,54 +1850,91 @@ class CandleCache:
                 protocol_label="HTTP repair",
             )
 
-    def ws_snapshot(self, pairs: List[str], granularity: str = "300", exchange: str = "coinbase"):
+    def ws_snapshot(
+        self,
+        pairs: List[str],
+        granularity: str = "300",
+        exchange: str = "coinbase",
+        target_candles: int = WS_SNAPSHOT_TARGET_CANDLES,
+        settle_seconds: float = WS_SNAPSHOT_SETTLE_SECONDS,
+        timeout_seconds: float = 60.0,
+    ):
         from coinbase.websocket import WSClient
 
         if exchange != "coinbase":
             raise NotImplementedError(f"Websocket snapshot is only implemented for coinbase, not {exchange}")
         received = set()
+        per_pair_timestamps: Dict[str, set] = {pid: set() for pid in pairs}
         done = threading.Event()
         rows_all = []
         lock = threading.Lock()
+        state = {
+            "last_new_data": time.monotonic(),
+        }
 
         def on_message(msg):
             try:
                 data = json.loads(msg) if isinstance(msg, str) else msg
             except Exception:
                 return
+            any_new = False
             for event in data.get("events", []):
                 if event.get("type") != "snapshot":
                     continue
                 for c in event.get("candles", []):
                     pid = c.get("product_id", "")
                     try:
+                        ts = _parse_candle_timestamp(c['start'])
                         rows_all.append({
                             'exchange': exchange,
                             'product_id': pid,
-                            'timestamp': _parse_candle_timestamp(c['start']),
+                            'timestamp': ts,
                             'open': float(c['open']), 'high': float(c['high']),
                             'low': float(c['low']),   'close': float(c['close']),
                             'volume': float(c['volume']), 'granularity': granularity,
                         })
                         with lock:
                             received.add(pid)
+                            if pid in per_pair_timestamps and ts not in per_pair_timestamps[pid]:
+                                per_pair_timestamps[pid].add(ts)
+                                any_new = True
                     except Exception:
                         pass
-            with lock:
-                if received.issuperset(set(pairs)):
-                    done.set()
+            if any_new:
+                with lock:
+                    state["last_new_data"] = time.monotonic()
 
         client = WSClient(api_key=None, api_secret=None, on_message=on_message)
         client.open()
         client.subscribe(pairs, ["candles"])
 
-        done.wait(timeout=60)
+        deadline = time.monotonic() + max(timeout_seconds, 1.0)
+        pair_set = set(pairs)
+        while time.monotonic() < deadline and not done.is_set():
+            with lock:
+                all_seen = received.issuperset(pair_set)
+                counts = {pid: len(per_pair_timestamps.get(pid, set())) for pid in pairs}
+                min_count = min(counts.values()) if counts else 0
+                quiet_for = time.monotonic() - state["last_new_data"]
+                if counts and min_count >= max(target_candles, 1):
+                    done.set()
+                elif all_seen and quiet_for >= max(settle_seconds, 0.0):
+                    done.set()
+            if done.is_set():
+                break
+            time.sleep(0.25)
         client.close()
 
         if rows_all:
             df = pd.DataFrame(rows_all)
             self.save_candles(df)
-            print(f"[WS snapshot] {len(rows_all)} candles from {len(received)}/{len(pairs)} pairs")
+            counts = {pid: len(per_pair_timestamps.get(pid, set())) for pid in pairs}
+            min_count = min(counts.values()) if counts else 0
+            max_count = max(counts.values()) if counts else 0
+            print(
+                f"[WS snapshot] {len(rows_all)} candles from {len(received)}/{len(pairs)} pairs "
+                f"target={target_candles} per_pair_min={min_count} per_pair_max={max_count}"
+            )
 
     def stream_live(
         self,

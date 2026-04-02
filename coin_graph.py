@@ -15,7 +15,7 @@ DEFAULT_MIN_PAIR_COVERAGE = 0.9
 
 
 def _use_pool() -> bool:
-    """True if literbike pool server is running and responsive."""
+    """True if the local pool server is running and responsive."""
     try:
         return pool_is_running()
     except Exception:
@@ -130,8 +130,6 @@ class CoinGraph:
         self.common_timestamps: List[pd.Timestamp] = []
         self.pair_coverage: Dict[str, float] = {}
         self.pair_exchange: Dict[str, str] = {}
-        self.bag_id: Optional[str] = None
-        self.bag_window_id: Optional[str] = None
         self.bag_surface_name: Optional[str] = None
         self.bag_thresholds_view_name: Optional[str] = None
         self._volatility: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
@@ -251,7 +249,7 @@ class CoinGraph:
                         real_products, adjacency = _adjacency_from_products([r[0] for r in rows])
                     else:
                         import duckdb
-                        with duckdb.connect(db_path) as conn:
+                        with duckdb.connect(db_path, read_only=True) as conn:
                             rows = conn.execute(
                                 "SELECT DISTINCT product_id FROM candles WHERE exchange = ?",
                                 [exchange],
@@ -412,26 +410,19 @@ class CoinGraph:
                 continue
             valid_subscriptions.append(sub)
 
-        self.bag_id = None
-        self.bag_window_id = None
         self.bag_thresholds_view_name = None
         self.bag_surface_name = None
         if statuses:
-            bag_state = self.cache.persist_bag_window_status(
-                bag_subscriptions,
+            self.bag_thresholds_view_name = self.cache.materialize_bag_thresholds_view(
                 statuses,
                 start,
                 end,
                 granularity=granularity,
                 min_coverage_ratio=min_pair_coverage,
-                bag_name="coin_graph",
             )
-            self.bag_id = bag_state["bag_id"]
-            self.bag_window_id = bag_state["bag_window_id"]
-            self.bag_thresholds_view_name = "bag_thresholds_v"
-        if valid_subscriptions and self.bag_window_id is not None:
-            self.bag_surface_name = self.cache.materialize_bag_surface_for_window(
-                self.bag_window_id
+        if valid_subscriptions and self.bag_thresholds_view_name is not None:
+            self.bag_surface_name = self.cache.materialize_bag_surface_from_thresholds_view(
+                self.bag_thresholds_view_name
             )
             surface_df = self.cache.read_bag_surface(self.bag_surface_name)
         else:
