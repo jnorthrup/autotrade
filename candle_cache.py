@@ -23,6 +23,12 @@ HTTP_429_COOLDOWN_SECONDS = 15.0
 
 _db_lock = threading.Lock()
 
+# (exchange, product_id, chunk_start_iso, chunk_end_iso, granularity) -> expiry monotonic time
+# Prevents re-fetching windows where the API returned 0 rows (illiquid pairs / permanent gaps).
+_EMPTY_CHUNK_COOLDOWN_SECONDS = 3600
+_empty_chunk_cache: Dict[Tuple, float] = {}
+_empty_chunk_lock = threading.Lock()
+
 def _utc_now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -2420,15 +2426,34 @@ class CandleCache:
                 granularity=api_gran,
             )
             if not (hasattr(resp, 'candles') and resp.candles):
+                # API has no candle for this window — record in cooldown to avoid re-hammering
+                _empty_chunk_key = (exchange, product_id, chunk_start.isoformat(), chunk_end.isoformat(), granularity)
+                with _empty_chunk_lock:
+                    _empty_chunk_cache[_empty_chunk_key] = time.monotonic() + _EMPTY_CHUNK_COOLDOWN_SECONDS
                 return {"rate_limited": 0, "rows_returned": 0, "rows_inserted": 0}
-            rows = [{
-                'exchange': exchange,
-                'product_id': product_id,
-                'timestamp': _parse_candle_timestamp(c.start),
-                'open': float(c.open), 'high': float(c.high),
-                'low': float(c.low),  'close': float(c.close),
-                'volume': float(c.volume), 'granularity': granularity,
-            } for c in resp.candles]
+            chunk_start_ts = pd.Timestamp(chunk_start)
+            chunk_end_ts = pd.Timestamp(chunk_end)
+            rows = []
+            for c in resp.candles:
+                ts = _parse_candle_timestamp(c.start)
+                # Filter to [chunk_start, chunk_end) — Coinbase end param is inclusive
+                # so the response may include the candle AT chunk_end which belongs to the next chunk.
+                if ts < chunk_start_ts or ts >= chunk_end_ts:
+                    continue
+                rows.append({
+                    'exchange': exchange,
+                    'product_id': product_id,
+                    'timestamp': ts,
+                    'open': float(c.open), 'high': float(c.high),
+                    'low': float(c.low),  'close': float(c.close),
+                    'volume': float(c.volume), 'granularity': granularity,
+                })
+            if not rows:
+                # All returned rows were out-of-window — record cooldown for this chunk
+                _empty_chunk_key = (exchange, product_id, chunk_start.isoformat(), chunk_end.isoformat(), granularity)
+                with _empty_chunk_lock:
+                    _empty_chunk_cache[_empty_chunk_key] = time.monotonic() + _EMPTY_CHUNK_COOLDOWN_SECONDS
+                return {"rate_limited": 0, "rows_returned": 0, "rows_inserted": 0}
             df = pd.DataFrame(rows)
             rows_inserted = self._count_new_candle_keys(df)
             self.save_candles(df)
@@ -2473,6 +2498,7 @@ class CandleCache:
         total_new = 0
         skipped = 0
         i = 0
+        now_mono = time.monotonic()
         while i < len(chunks):
             chunk_start, chunk_end = chunks[i]
             if not force and self._range_is_fully_cached(
@@ -2482,6 +2508,14 @@ class CandleCache:
                 granularity,
                 exchange=exchange,
             ):
+                skipped += 1
+                i += 1
+                continue
+            # Skip chunks where the API previously returned 0 rows (illiquid / permanent gap)
+            _empty_key = (exchange, product_id, chunk_start.isoformat(), chunk_end.isoformat(), granularity)
+            with _empty_chunk_lock:
+                _expiry = _empty_chunk_cache.get(_empty_key, 0)
+            if not force and now_mono < _expiry:
                 skipped += 1
                 i += 1
                 continue
