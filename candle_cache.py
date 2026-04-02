@@ -2359,54 +2359,6 @@ class CandleCache:
         )
         return bool(status["covered"])
 
-    def _backfill_plan(
-        self,
-        product_id: str,
-        start: datetime,
-        end: datetime,
-        granularity: str = "300",
-        exchange: Optional[str] = None,
-    ) -> List[Tuple[datetime, datetime]]:
-        status = self.range_coverage_status(
-            product_id,
-            start,
-            end,
-            granularity,
-            exchange=exchange,
-        )
-        if bool(status["covered"]):
-            return []
-
-        expected_first_ns, expected_last_ns, expected = _expected_bucket_bounds(start, end, granularity)
-        if expected <= 0:
-            return []
-
-        first_ts = status["first_timestamp"]
-        last_ts = status["last_timestamp"]
-        gran_sec = _granularity_seconds(granularity)
-
-        if first_ts is None or last_ts is None:
-            return [(start, end)]
-
-        if int(status["bad_gap_count"]) > 0:
-            return [(start, end)]
-
-        ranges: List[Tuple[datetime, datetime]] = []
-        expected_first = _parse_candle_timestamp(expected_first_ns).to_pydatetime()
-        expected_last = _parse_candle_timestamp(expected_last_ns).to_pydatetime()
-        first_dt = pd.Timestamp(first_ts).to_pydatetime()
-        last_dt = pd.Timestamp(last_ts).to_pydatetime()
-
-        if first_dt > expected_first:
-            ranges.append((start, first_dt))
-
-        tail_start = last_dt + timedelta(seconds=gran_sec)
-        tail_end = expected_last + timedelta(seconds=gran_sec)
-        if tail_start < tail_end:
-            ranges.append((tail_start, tail_end))
-
-        return [(window_start, window_end) for window_start, window_end in ranges if window_start < window_end]
-
     def _fetch_chunk(
         self,
         product_id: str,
@@ -2514,79 +2466,18 @@ class CandleCache:
         granularity: str = "300",
         exchange: str = "coinbase",
     ):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         if not pairs:
             return
         if exchange != "coinbase":
             raise NotImplementedError(f"HTTP backfill is only implemented for coinbase, not {exchange}")
-        plans: List[Tuple[str, datetime, datetime]] = []
-        skipped_pairs = 0
-        full_window_pairs = 0
-        partial_window_pairs = 0
-        for pid in pairs:
-            ranges = self._backfill_plan(
-                pid,
-                start,
-                end,
-                granularity=granularity,
-                exchange=exchange,
-            )
-            if not ranges:
-                skipped_pairs += 1
-                continue
-            if len(ranges) == 1 and ranges[0][0] == start and ranges[0][1] == end:
-                full_window_pairs += 1
-            else:
-                partial_window_pairs += 1
-            for window_start, window_end in ranges:
-                plans.append((pid, window_start, window_end))
-
-        print(
-            f"[HTTP backfill] {len(pairs)} pairs, "
-            f"{_utc_isoformat(start)} -> {_utc_isoformat(end)}, granularity={granularity}, "
-            f"skip={skipped_pairs}, partial={partial_window_pairs}, full={full_window_pairs}"
+        self.repair_bag_drawthrough(
+            [{"exchange": exchange, "product_id": pid} for pid in pairs],
+            start,
+            end,
+            granularity=granularity,
+            log_prefix="[HTTP backfill]",
+            label="range",
         )
-        if not plans:
-            return
-
-        def fetch_one(plan: Tuple[str, datetime, datetime]) -> Tuple[str, datetime, datetime]:
-            pid, window_start, window_end = plan
-            self._fetch_and_save(
-                pid,
-                exchange,
-                window_start,
-                window_end,
-                granularity,
-                protocol_label="HTTP backfill",
-            )
-            return plan
-
-        remaining = list(plans)
-        while remaining:
-            with self._concurrency_lock:
-                workers = self._concurrency
-            batch = remaining[:workers]
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(fetch_one, plan): plan for plan in batch}
-                done: List[Tuple[str, datetime, datetime]] = []
-                for future in as_completed(futures):
-                    pid, window_start, window_end = futures[future]
-                    try:
-                        future.result()
-                        done.append((pid, window_start, window_end))
-                        print(
-                            f"  ✓ [HTTP backfill][{exchange}][{pid}] "
-                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)} "
-                            f"({len(done)}/{len(batch)})"
-                        )
-                    except Exception as e:
-                        print(
-                            f"  ✗ [HTTP backfill][{exchange}][{pid}] "
-                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}: {e}"
-                        )
-                        done.append((pid, window_start, window_end))
-            remaining = [plan for plan in remaining if plan not in done]
 
     def backfill_http_exact(
         self,
@@ -2894,37 +2785,16 @@ class CandleCache:
         exchange: str = "coinbase",
         protocol_label: str = "HTTP backfill",
     ):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def fetch_one(pid):
-            self._fetch_and_save(
-                pid,
-                exchange,
-                start,
-                end,
-                granularity,
-                protocol_label=protocol_label,
-            )
-            return pid
-
-        remaining = list(pairs)
-        while remaining:
-            with self._concurrency_lock:
-                workers = self._concurrency
-            batch = remaining[:workers]
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(fetch_one, pid): pid for pid in batch}
-                done = []
-                for f in as_completed(futures):
-                    pid = futures[f]
-                    try:
-                        f.result()
-                        done.append(pid)
-                        print(f"  ✓ [{protocol_label}][{exchange}][{pid}] ({len(done)}/{len(batch)})")
-                    except Exception as e:
-                        print(f"  ✗ [{protocol_label}][{exchange}][{pid}]: {e}")
-                        done.append(pid)
-            remaining = [p for p in remaining if p not in done]
+        if not pairs:
+            return
+        self.repair_bag_drawthrough(
+            [{"exchange": exchange, "product_id": pid} for pid in pairs],
+            start,
+            end,
+            granularity=granularity,
+            log_prefix=f"[{protocol_label}]",
+            label="prefetch",
+        )
 
     def prefetch_all_async(
         self,
