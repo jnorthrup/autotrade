@@ -1903,18 +1903,14 @@ class CandleCache:
                     & (pd.to_datetime(fragments_df["fragment_start"], errors="coerce") < pd.Timestamp(fetch_end_dt))
                     & (pd.to_datetime(fragments_df["fragment_end"], errors="coerce") > pd.Timestamp(fetch_start_dt))
                 ]
-                exact_plans = [
-                    (
-                        str(row_fragment.product_id),
-                        pd.Timestamp(row_fragment.fragment_start).to_pydatetime(),
-                        pd.Timestamp(row_fragment.fragment_end).to_pydatetime(),
-                    )
-                    for row_fragment in group_fragments.sort_values(
-                        ["fragment_start", "fragment_end", "exchange", "product_id"]
-                    ).itertuples(index=False)
+                fetch_pairs = sorted({
+                    str(row_fragment.product_id)
+                    for row_fragment in group_fragments.itertuples(index=False)
                     if (str(row_fragment.exchange), str(row_fragment.product_id)) in allowed_keys
-                    and pd.Timestamp(row_fragment.fragment_start).to_pydatetime()
-                    < pd.Timestamp(row_fragment.fragment_end).to_pydatetime()
+                })
+                exact_plans = [
+                    (pid, fetch_start_dt, fetch_end_dt)
+                    for pid in fetch_pairs
                 ]
                 if not exact_plans:
                     continue
