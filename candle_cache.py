@@ -236,6 +236,15 @@ def _bag_repair_status_view_name(
     return f"bag_repair_{_bag_digest(subscriptions, start, end, granularity)}"
 
 
+def _bag_missing_fragments_view_name(
+    subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str,
+) -> str:
+    return f"bag_missing_fragments_{_bag_digest(subscriptions, start, end, granularity)}"
+
+
 class _TokenBucket:
     def __init__(self, rate: float):
         self._rate = rate
@@ -1277,6 +1286,135 @@ class CandleCache:
             return df
         df = df.copy()
         for column in ("window_start", "window_end", "first_timestamp", "last_timestamp", "fetch_start", "fetch_end"):
+            df[column] = pd.to_datetime(df[column], errors="coerce")
+        return df
+
+    def materialize_bag_missing_fragments_view(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        view_name: Optional[str] = None,
+    ) -> str:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot materialize bag missing fragments view with no subscriptions")
+
+        gran_sec = _granularity_seconds(granularity)
+        gran_ns = gran_sec * 1_000_000_000
+        view_name = view_name or _bag_missing_fragments_view_name(deduped, start, end, granularity)
+        values_sql = ", ".join(
+            f"({_sql_escape(sub['exchange'])}, {_sql_escape(sub['product_id'])})"
+            for sub in deduped
+        )
+        sql = f"""
+            CREATE OR REPLACE VIEW {view_name} AS
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            ),
+            expected AS (
+                SELECT
+                    b.exchange,
+                    b.product_id,
+                    gs.bucket AS timestamp,
+                    epoch_ns(gs.bucket) AS ts_ns
+                FROM bag AS b
+                CROSS JOIN generate_series(
+                    {_sql_escape(start)}::TIMESTAMP,
+                    {_sql_escape(end)}::TIMESTAMP - INTERVAL {gran_sec} SECOND,
+                    INTERVAL {gran_sec} SECOND
+                ) AS gs(bucket)
+            ),
+            observed AS (
+                SELECT DISTINCT
+                    c.exchange,
+                    c.product_id,
+                    c.timestamp
+                FROM candles AS c
+                JOIN bag AS b
+                  ON b.exchange = c.exchange
+                 AND b.product_id = c.product_id
+                WHERE c.granularity = {_sql_escape(granularity)}
+                  AND c.timestamp >= {_sql_escape(start)}
+                  AND c.timestamp < {_sql_escape(end)}
+            ),
+            missing AS (
+                SELECT
+                    e.exchange,
+                    e.product_id,
+                    e.timestamp,
+                    e.ts_ns,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.exchange, e.product_id
+                        ORDER BY e.timestamp
+                    ) AS rn
+                FROM expected AS e
+                LEFT JOIN observed AS o
+                  ON o.exchange = e.exchange
+                 AND o.product_id = e.product_id
+                 AND o.timestamp = e.timestamp
+                WHERE o.timestamp IS NULL
+            ),
+            grouped AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    MIN(timestamp) AS fragment_start,
+                    MAX(timestamp) + INTERVAL {gran_sec} SECOND AS fragment_end,
+                    COUNT(*)::BIGINT AS missing_count
+                FROM (
+                    SELECT
+                        exchange,
+                        product_id,
+                        timestamp,
+                        ts_ns - (rn * {gran_ns}) AS grp
+                    FROM missing
+                )
+                GROUP BY exchange, product_id, grp
+            )
+            SELECT
+                exchange,
+                product_id,
+                fragment_start,
+                fragment_end,
+                {_sql_escape(start)}::TIMESTAMP AS window_start,
+                {_sql_escape(end)}::TIMESTAMP AS window_end,
+                {_sql_escape(granularity)}::VARCHAR AS granularity,
+                missing_count
+            FROM grouped
+            ORDER BY fragment_start, fragment_end, exchange, product_id
+        """
+        if _use_pool(self.db_path):
+            _pool().execute(sql)
+        else:
+            with _db_lock:
+                with duckdb.connect(self.db_path) as conn:
+                    conn.execute(sql)
+        return view_name
+
+    def read_bag_missing_fragments(self, view_name: str) -> pd.DataFrame:
+        sql = f"SELECT * FROM {view_name} ORDER BY fragment_start, fragment_end, exchange, product_id"
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql)
+            columns = [
+                "exchange",
+                "product_id",
+                "fragment_start",
+                "fragment_end",
+                "window_start",
+                "window_end",
+                "granularity",
+                "missing_count",
+            ]
+            df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        else:
+            with duckdb.connect(self.db_path) as conn:
+                df = conn.execute(sql).df()
+        if df.empty:
+            return df
+        df = df.copy()
+        for column in ("fragment_start", "fragment_end", "window_start", "window_end"):
             df[column] = pd.to_datetime(df[column], errors="coerce")
         return df
 

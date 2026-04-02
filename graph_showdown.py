@@ -497,71 +497,104 @@ def _bag_surface_state(
     return surface_df, status_df, common_support_df, missing, common_timestamps
 
 
-def _repair_recent_pair_tails(
+def _group_fragment_fetch_windows(fragments_df: pd.DataFrame) -> List[Tuple[datetime, datetime, List[str]]]:
+    if fragments_df.empty:
+        return []
+
+    windows: List[Tuple[datetime, datetime, List[str]]] = []
+    current_start: Optional[pd.Timestamp] = None
+    current_end: Optional[pd.Timestamp] = None
+    current_pairs: set = set()
+
+    ordered = fragments_df.sort_values(
+        ["fragment_start", "fragment_end", "exchange", "product_id"]
+    )
+    for row in ordered.itertuples(index=False):
+        frag_start = pd.Timestamp(row.fragment_start)
+        frag_end = pd.Timestamp(row.fragment_end)
+        product_id = str(row.product_id)
+
+        if current_start is None or current_end is None:
+            current_start = frag_start
+            current_end = frag_end
+            current_pairs = {product_id}
+            continue
+
+        if frag_start <= current_end:
+            current_end = max(current_end, frag_end)
+            current_pairs.add(product_id)
+            continue
+
+        windows.append(
+            (
+                current_start.to_pydatetime(),
+                current_end.to_pydatetime(),
+                sorted(current_pairs),
+            )
+        )
+        current_start = frag_start
+        current_end = frag_end
+        current_pairs = {product_id}
+
+    if current_start is not None and current_end is not None:
+        windows.append(
+            (
+                current_start.to_pydatetime(),
+                current_end.to_pydatetime(),
+                sorted(current_pairs),
+            )
+        )
+    return windows
+
+
+def _drawthrough_repair_window(
     cache: CandleCache,
     subscriptions: List[Dict[str, str]],
     *,
     exchange: str,
+    start: datetime,
     end: datetime,
     granularity: str = "300",
-    distance_bars: int = 6,
+    label: str = "drawthrough",
 ) -> None:
-    distance_bars = max(int(distance_bars), 1)
-    gran_sec = int(granularity)
+    window_start = _floor_time_to_granularity(start, granularity)
     window_end = _floor_time_to_granularity(end, granularity)
-    window_start = window_end - timedelta(seconds=gran_sec * distance_bars)
-    repair_view = cache.materialize_bag_repair_status_view(
+    if window_start >= window_end:
+        return
+
+    fragments_view = cache.materialize_bag_missing_fragments_view(
         subscriptions,
         window_start,
         window_end,
         granularity=granularity,
     )
-    repair_df = cache.read_bag_repair_status(repair_view)
-    if repair_df.empty:
+    fragments_df = cache.read_bag_missing_fragments(fragments_view)
+    if fragments_df.empty:
         print(
-            f"[Coinbase week/live] recent-tail repair view empty "
+            f"[Coinbase week/live] {label} perfect "
             f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
         )
         return
 
-    repair_df = repair_df.copy()
-    repair_df["needs_fetch"] = repair_df["needs_fetch"].astype(bool)
-    need_df = repair_df[repair_df["needs_fetch"]]
-    if need_df.empty:
-        print(
-            f"[Coinbase week/live] recent-tail repair clean "
-            f"distance_bars={distance_bars} need_fetch=0/{len(repair_df)} "
-            f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
-        )
-        return
-
-    kind_counts = ", ".join(
-        f"{kind}={count}"
-        for kind, count in need_df["fetch_kind"].value_counts().sort_index().items()
-    )
+    fragment_windows = _group_fragment_fetch_windows(fragments_df)
     print(
-        f"[Coinbase week/live] recent-tail repair "
-        f"distance_bars={distance_bars} need_fetch={len(need_df)}/{len(repair_df)} "
-        f"kinds={kind_counts} "
+        f"[Coinbase week/live] {label} fragments="
+        f"{len(fragments_df)} groups={len(fragment_windows)} "
         f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
     )
 
-    for fetch_start, group in need_df.groupby("fetch_start", sort=True):
-        if pd.isna(fetch_start):
-            fetch_start = window_start
-        fetch_pairs = [str(pid) for pid in group["product_id"].tolist()]
-        fetch_start_dt = pd.Timestamp(fetch_start).to_pydatetime()
-        if fetch_start_dt >= window_end:
+    for fetch_start_dt, fetch_end_dt, fetch_pairs in fragment_windows:
+        if fetch_start_dt >= fetch_end_dt:
             continue
         print(
-            f"[Coinbase week/live] recent-tail fetch "
+            f"[Coinbase week/live] {label} fetch "
             f"pairs={len(fetch_pairs)} "
-            f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(window_end)}"
+            f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(fetch_end_dt)}"
         )
         cache.backfill_http(
             fetch_pairs,
             fetch_start_dt,
-            window_end,
+            fetch_end_dt,
             granularity,
             exchange=exchange,
         )
@@ -1581,41 +1614,14 @@ def run_coinbase_week_http_then_live(
             target_candles=WS_SNAPSHOT_TARGET_CANDLES,
         )
 
-        _surface_df, _status_df, _common_support_df, missing_subscriptions, _common_timestamps = _bag_surface_state(
-            cache,
-            subs,
-            initial_start,
-            initial_end,
-            granularity=granularity,
-        )
-        if missing_subscriptions:
-            missing_pairs = [sub["product_id"] for sub in missing_subscriptions]
-            print(
-                f"[Coinbase week/live] drawthrough missing={_format_subscription_keys(missing_subscriptions)}; "
-                f"backfilling full window for missing subscriptions"
-            )
-            cache.backfill_http(
-                missing_pairs,
-                initial_start,
-                initial_end,
-                granularity,
-                exchange=exchange,
-            )
-            _surface_df, _status_df, _common_support_df, missing_subscriptions, _common_timestamps = _bag_surface_state(
-                cache,
-                subs,
-                initial_start,
-                initial_end,
-                granularity=granularity,
-            )
-
-        _repair_recent_pair_tails(
+        _drawthrough_repair_window(
             cache,
             subs,
             exchange=exchange,
+            start=initial_start,
             end=initial_end,
             granularity=granularity,
-            distance_bars=max(live_http_overlap_candles, WS_SNAPSHOT_TARGET_CANDLES),
+            label="drawthrough",
         )
 
     graph = _load_selected_pair_graph(
