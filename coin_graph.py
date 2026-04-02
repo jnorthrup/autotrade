@@ -434,6 +434,8 @@ class CoinGraph:
         else:
             grouped = []
 
+        full_index = pd.date_range(start=start, end=end, freq=f"{granularity}s", inclusive="left")
+
         for (exchange, product_id), df in grouped:
             coverage = float(status_by_key[(exchange, product_id)]["coverage_ratio"])
             df = (
@@ -441,6 +443,16 @@ class CoinGraph:
                 .sort_values("timestamp")
                 .set_index("timestamp")
             )
+            
+            missing_idx = full_index.difference(df.index)
+            df = df.reindex(full_index)
+            df["close"] = df["close"].ffill().bfill()
+            if not df.empty:
+                df.loc[missing_idx, "open"] = df.loc[missing_idx, "close"]
+                df.loc[missing_idx, "high"] = df.loc[missing_idx, "close"]
+                df.loc[missing_idx, "low"] = df.loc[missing_idx, "close"]
+                df.loc[missing_idx, "volume"] = 0.0
+
             self.add_product_frame(exchange, product_id, df, coverage=coverage)
             valid_pairs.append(f"{exchange}:{product_id}")
 

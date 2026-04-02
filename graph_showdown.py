@@ -31,7 +31,7 @@ from candle_cache import (
 )
 
 import duckdb
-from pool_client import PoolClient, pool_is_running
+from pool_client import PoolClient, ensure_pool_running, pool_is_running
 
 # --- Pool routing helpers ---
 _pool_client_instance = None
@@ -598,6 +598,8 @@ def _load_selected_pair_graph(
     }
     materialized_subscriptions: List[Dict[str, str]] = []
 
+    full_index = pd.date_range(start=start, end=end, freq=f"{granularity}s", inclusive="left")
+
     for (exchange, pid), df in surface_df.groupby(["exchange", "product_id"], sort=False):
         parts = pid.split("-", 1)
         if len(parts) != 2:
@@ -610,6 +612,15 @@ def _load_selected_pair_graph(
         if df.empty:
             continue
         coverage = min(1.0, counts_by_key.get((exchange, pid), 0) / expected)
+
+        missing_idx = full_index.difference(df.index)
+        df = df.reindex(full_index)
+        df["close"] = df["close"].ffill().bfill()
+        df.loc[missing_idx, "open"] = df.loc[missing_idx, "close"]
+        df.loc[missing_idx, "high"] = df.loc[missing_idx, "close"]
+        df.loc[missing_idx, "low"] = df.loc[missing_idx, "close"]
+        df.loc[missing_idx, "volume"] = 0.0
+
         graph.add_product_frame(exchange, pid, df, coverage=coverage)
         materialized_subscriptions.append({"exchange": exchange, "product_id": pid})
 
@@ -1508,6 +1519,8 @@ def run_coinbase_week_http_then_live(
         f"normalized={bootstrap['normalized_timestamps']} "
         f"purged={bootstrap['purged_future_rows']}"
     )
+    ensure_pool_running(str(Config.DB_PATH))
+    print(f"[Coinbase week/live bootstrap] duckdb_pool=ready db={Path(Config.DB_PATH).resolve()}")
     initial_end = _floor_time_to_granularity(_utc_now_naive(), granularity)
     initial_start = initial_end - timedelta(days=lookback_days)
 
@@ -1886,6 +1899,9 @@ def main():
             live_idle_restart_seconds=args.live_idle_restart_seconds,
         )
         return
+
+    ensure_pool_running(str(Config.DB_PATH))
+    print(f"[DuckDB pool] ready db={Path(Config.DB_PATH).resolve()}")
 
     print("Loading coin graph...")
     graph = CoinGraph(fee_rate=0.001)
