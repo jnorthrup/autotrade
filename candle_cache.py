@@ -245,6 +245,33 @@ def _bag_missing_fragments_view_name(
     return f"bag_missing_fragments_{_bag_digest(subscriptions, start, end, granularity)}"
 
 
+def _bag_tail_coverage_view_name(
+    subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str,
+) -> str:
+    return f"bag_tail_coverage_{_bag_digest(subscriptions, start, end, granularity)}"
+
+
+def _bag_tail_delta_fragments_view_name(
+    subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str,
+) -> str:
+    return f"bag_tail_delta_fragments_{_bag_digest(subscriptions, start, end, granularity)}"
+
+
+def _bag_fragment_groups_view_name(
+    subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str,
+) -> str:
+    return f"bag_fragment_groups_{_bag_digest(subscriptions, start, end, granularity)}"
+
+
 class _TokenBucket:
     def __init__(self, rate: float):
         self._rate = rate
@@ -1289,6 +1316,400 @@ class CandleCache:
             df[column] = pd.to_datetime(df[column], errors="coerce")
         return df
 
+    def materialize_bag_tail_coverage_view(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        view_name: Optional[str] = None,
+    ) -> str:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot materialize bag tail coverage view with no subscriptions")
+
+        gran_sec = _granularity_seconds(granularity)
+        view_name = view_name or _bag_tail_coverage_view_name(deduped, start, end, granularity)
+        values_sql = ", ".join(
+            f"({_sql_escape(sub['exchange'])}, {_sql_escape(sub['product_id'])})"
+            for sub in deduped
+        )
+        sql = f"""
+            CREATE OR REPLACE VIEW {view_name} AS
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            ),
+            expected AS (
+                SELECT
+                    b.exchange,
+                    b.product_id,
+                    gs.bucket AS timestamp
+                FROM bag AS b
+                CROSS JOIN generate_series(
+                    {_sql_escape(start)}::TIMESTAMP,
+                    {_sql_escape(end)}::TIMESTAMP - INTERVAL {gran_sec} SECOND,
+                    INTERVAL {gran_sec} SECOND
+                ) AS gs(bucket)
+            ),
+            ranked AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    timestamp,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY exchange, product_id
+                        ORDER BY timestamp DESC
+                    ) AS desc_rn
+                FROM expected
+            ),
+            observed AS (
+                SELECT DISTINCT
+                    c.exchange,
+                    c.product_id,
+                    c.timestamp
+                FROM candles AS c
+                JOIN bag AS b
+                  ON b.exchange = c.exchange
+                 AND b.product_id = c.product_id
+                WHERE c.granularity = {_sql_escape(granularity)}
+                  AND c.timestamp >= {_sql_escape(start)}
+                  AND c.timestamp < {_sql_escape(end)}
+            ),
+            joined AS (
+                SELECT
+                    r.exchange,
+                    r.product_id,
+                    r.timestamp,
+                    r.desc_rn,
+                    (o.timestamp IS NOT NULL) AS present
+                FROM ranked AS r
+                LEFT JOIN observed AS o
+                  ON o.exchange = r.exchange
+                 AND o.product_id = r.product_id
+                 AND o.timestamp = r.timestamp
+            ),
+            agg AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    COUNT(*)::BIGINT AS expected_count,
+                    COALESCE(SUM(CASE WHEN present THEN 1 ELSE 0 END), 0)::BIGINT AS actual_count,
+                    MIN(CASE WHEN NOT present THEN desc_rn END) AS first_gap_desc_rn
+                FROM joined
+                GROUP BY exchange, product_id
+            )
+            SELECT
+                exchange,
+                product_id,
+                {_sql_escape(start)}::TIMESTAMP AS window_start,
+                {_sql_escape(end)}::TIMESTAMP AS window_end,
+                {_sql_escape(granularity)}::VARCHAR AS granularity,
+                expected_count,
+                actual_count,
+                CASE
+                    WHEN expected_count <= 0 THEN 0
+                    WHEN first_gap_desc_rn IS NULL THEN expected_count
+                    WHEN first_gap_desc_rn <= 1 THEN 0
+                    ELSE first_gap_desc_rn - 1
+                END::BIGINT AS contiguous_tail_bars,
+                {_sql_escape(end)}::TIMESTAMP - (
+                    CASE
+                        WHEN expected_count <= 0 THEN 0
+                        WHEN first_gap_desc_rn IS NULL THEN expected_count
+                        WHEN first_gap_desc_rn <= 1 THEN 0
+                        ELSE first_gap_desc_rn - 1
+                    END
+                ) * INTERVAL {gran_sec} SECOND AS covered_back_to,
+                (
+                    CASE
+                        WHEN expected_count <= 0 THEN 0
+                        WHEN first_gap_desc_rn IS NULL THEN expected_count
+                        WHEN first_gap_desc_rn <= 1 THEN 0
+                        ELSE first_gap_desc_rn - 1
+                    END
+                ) < expected_count AS needs_fetch
+            FROM agg
+            ORDER BY exchange, product_id
+        """
+        if _use_pool(self.db_path):
+            _pool().execute(sql)
+        else:
+            with _db_lock:
+                with duckdb.connect(self.db_path) as conn:
+                    conn.execute(sql)
+        return view_name
+
+    def read_bag_tail_coverage(self, view_name: str) -> pd.DataFrame:
+        sql = f"SELECT * FROM {view_name} ORDER BY exchange, product_id"
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql)
+            columns = [
+                "exchange",
+                "product_id",
+                "window_start",
+                "window_end",
+                "granularity",
+                "expected_count",
+                "actual_count",
+                "contiguous_tail_bars",
+                "covered_back_to",
+                "needs_fetch",
+            ]
+            df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        else:
+            with duckdb.connect(self.db_path) as conn:
+                df = conn.execute(sql).df()
+        if df.empty:
+            return df
+        df = df.copy()
+        for column in ("window_start", "window_end", "covered_back_to"):
+            df[column] = pd.to_datetime(df[column], errors="coerce")
+        return df
+
+    def materialize_bag_tail_delta_fragments_view(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        tail_view_name: Optional[str] = None,
+        view_name: Optional[str] = None,
+    ) -> str:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot materialize bag tail delta fragments view with no subscriptions")
+
+        gran_sec = _granularity_seconds(granularity)
+        gran_ns = gran_sec * 1_000_000_000
+        tail_view_name = tail_view_name or self.materialize_bag_tail_coverage_view(
+            deduped,
+            start,
+            end,
+            granularity=granularity,
+        )
+        view_name = view_name or _bag_tail_delta_fragments_view_name(deduped, start, end, granularity)
+        sql = f"""
+            CREATE OR REPLACE VIEW {view_name} AS
+            WITH tail AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    covered_back_to
+                FROM {tail_view_name}
+                WHERE covered_back_to > {_sql_escape(start)}::TIMESTAMP
+            ),
+            expected AS (
+                SELECT
+                    t.exchange,
+                    t.product_id,
+                    gs.bucket AS timestamp,
+                    epoch_ns(gs.bucket) AS ts_ns
+                FROM tail AS t
+                CROSS JOIN generate_series(
+                    {_sql_escape(start)}::TIMESTAMP,
+                    t.covered_back_to - INTERVAL {gran_sec} SECOND,
+                    INTERVAL {gran_sec} SECOND
+                ) AS gs(bucket)
+            ),
+            observed AS (
+                SELECT DISTINCT
+                    c.exchange,
+                    c.product_id,
+                    c.timestamp
+                FROM candles AS c
+                JOIN tail AS t
+                  ON t.exchange = c.exchange
+                 AND t.product_id = c.product_id
+                WHERE c.granularity = {_sql_escape(granularity)}
+                  AND c.timestamp >= {_sql_escape(start)}
+                  AND c.timestamp < t.covered_back_to
+            ),
+            missing AS (
+                SELECT
+                    e.exchange,
+                    e.product_id,
+                    e.timestamp,
+                    e.ts_ns,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.exchange, e.product_id
+                        ORDER BY e.timestamp
+                    ) AS rn
+                FROM expected AS e
+                LEFT JOIN observed AS o
+                  ON o.exchange = e.exchange
+                 AND o.product_id = e.product_id
+                 AND o.timestamp = e.timestamp
+                WHERE o.timestamp IS NULL
+            ),
+            grouped AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    MIN(timestamp) AS fragment_start,
+                    MAX(timestamp) + INTERVAL {gran_sec} SECOND AS fragment_end,
+                    COUNT(*)::BIGINT AS missing_count
+                FROM (
+                    SELECT
+                        exchange,
+                        product_id,
+                        timestamp,
+                        ts_ns - (rn * {gran_ns}) AS grp
+                    FROM missing
+                )
+                GROUP BY exchange, product_id, grp
+            )
+            SELECT
+                exchange,
+                product_id,
+                fragment_start,
+                fragment_end,
+                {_sql_escape(start)}::TIMESTAMP AS window_start,
+                {_sql_escape(end)}::TIMESTAMP AS window_end,
+                {_sql_escape(granularity)}::VARCHAR AS granularity,
+                missing_count
+            FROM grouped
+            ORDER BY fragment_start, fragment_end, exchange, product_id
+        """
+        if _use_pool(self.db_path):
+            _pool().execute(sql)
+        else:
+            with _db_lock:
+                with duckdb.connect(self.db_path) as conn:
+                    conn.execute(sql)
+        return view_name
+
+    def materialize_bag_fragment_groups_view(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        fragments_view_name: Optional[str] = None,
+        view_name: Optional[str] = None,
+    ) -> str:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot materialize bag fragment groups view with no subscriptions")
+
+        values_sql = ", ".join(
+            f"({_sql_escape(sub['exchange'])}, {_sql_escape(sub['product_id'])})"
+            for sub in deduped
+        )
+        fragments_view_name = fragments_view_name or self.materialize_bag_tail_delta_fragments_view(
+            deduped,
+            start,
+            end,
+            granularity=granularity,
+        )
+        view_name = view_name or _bag_fragment_groups_view_name(deduped, start, end, granularity)
+        sql = f"""
+            CREATE OR REPLACE VIEW {view_name} AS
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            ),
+            bag_counts AS (
+                SELECT exchange, COUNT(*)::BIGINT AS bag_pairs
+                FROM bag
+                GROUP BY exchange
+            ),
+            ordered AS (
+                SELECT
+                    f.exchange,
+                    f.product_id,
+                    f.fragment_start,
+                    f.fragment_end,
+                    f.missing_count,
+                    MAX(f.fragment_end) OVER (
+                        PARTITION BY f.exchange
+                        ORDER BY f.fragment_start, f.fragment_end, f.product_id
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS running_fragment_end
+                FROM {fragments_view_name} AS f
+            ),
+            marked AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    fragment_start,
+                    fragment_end,
+                    missing_count,
+                    CASE
+                        WHEN fragment_start > COALESCE(
+                            LAG(running_fragment_end) OVER (
+                                PARTITION BY exchange
+                                ORDER BY fragment_start, fragment_end, product_id
+                            ),
+                            fragment_start
+                        )
+                            THEN 1
+                        ELSE 0
+                    END AS group_break
+                FROM ordered
+            ),
+            grouped AS (
+                SELECT
+                    exchange,
+                    product_id,
+                    fragment_start,
+                    fragment_end,
+                    missing_count,
+                    SUM(group_break) OVER (
+                        PARTITION BY exchange
+                        ORDER BY fragment_start, fragment_end, product_id
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS group_id
+                FROM marked
+            )
+            SELECT
+                g.exchange,
+                g.group_id::BIGINT AS group_id,
+                MIN(g.fragment_start) AS group_start,
+                MAX(g.fragment_end) AS group_end,
+                COUNT(*)::BIGINT AS fragment_count,
+                COUNT(DISTINCT g.exchange || ':' || g.product_id)::BIGINT AS member_pairs,
+                b.bag_pairs,
+                (b.bag_pairs - COUNT(DISTINCT g.exchange || ':' || g.product_id)::BIGINT)::BIGINT AS straggler_pairs,
+                SUM(g.missing_count)::BIGINT AS missing_count
+            FROM grouped AS g
+            JOIN bag_counts AS b
+              ON b.exchange = g.exchange
+            GROUP BY g.exchange, g.group_id, b.bag_pairs
+            ORDER BY group_start, group_end, g.exchange
+        """
+        if _use_pool(self.db_path):
+            _pool().execute(sql)
+        else:
+            with _db_lock:
+                with duckdb.connect(self.db_path) as conn:
+                    conn.execute(sql)
+        return view_name
+
+    def read_bag_fragment_groups(self, view_name: str) -> pd.DataFrame:
+        sql = f"SELECT * FROM {view_name} ORDER BY group_start, group_end, exchange"
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql)
+            columns = [
+                "exchange",
+                "group_id",
+                "group_start",
+                "group_end",
+                "fragment_count",
+                "member_pairs",
+                "bag_pairs",
+                "straggler_pairs",
+                "missing_count",
+            ]
+            df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        else:
+            with duckdb.connect(self.db_path) as conn:
+                df = conn.execute(sql).df()
+        if df.empty:
+            return df
+        df = df.copy()
+        for column in ("group_start", "group_end"):
+            df[column] = pd.to_datetime(df[column], errors="coerce")
+        return df
+
     def materialize_bag_missing_fragments_view(
         self,
         subscriptions: List[Dict[str, str]],
@@ -1949,6 +2370,75 @@ class CandleCache:
                     except Exception as e:
                         print(
                             f"  ✗ [HTTP backfill][{exchange}][{pid}] "
+                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}: {e}"
+                        )
+                        done.append((pid, window_start, window_end))
+            remaining = [plan for plan in remaining if plan not in done]
+
+    def backfill_http_exact(
+        self,
+        plans: List[Tuple[str, datetime, datetime]],
+        granularity: str = "300",
+        exchange: str = "coinbase",
+        protocol_label: str = "HTTP backfill/exact",
+    ):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if not plans:
+            return
+        if exchange != "coinbase":
+            raise NotImplementedError(f"HTTP backfill is only implemented for coinbase, not {exchange}")
+
+        normalized_plans = sorted(
+            {
+                (str(pid), _floor_time_to_granularity(start, granularity), _floor_time_to_granularity(end, granularity))
+                for pid, start, end in plans
+                if start < end
+            },
+            key=lambda item: (item[1], item[2], item[0]),
+        )
+        if not normalized_plans:
+            return
+
+        print(
+            f"[{protocol_label}] windows={len(normalized_plans)} "
+            f"pairs={len({pid for pid, _, _ in normalized_plans})} "
+            f"granularity={granularity}"
+        )
+
+        def fetch_one(plan: Tuple[str, datetime, datetime]) -> Tuple[str, datetime, datetime]:
+            pid, window_start, window_end = plan
+            self._fetch_and_save(
+                pid,
+                exchange,
+                window_start,
+                window_end,
+                granularity,
+                protocol_label=protocol_label,
+            )
+            return plan
+
+        remaining = list(normalized_plans)
+        while remaining:
+            with self._concurrency_lock:
+                workers = self._concurrency
+            batch = remaining[:workers]
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(fetch_one, plan): plan for plan in batch}
+                done: List[Tuple[str, datetime, datetime]] = []
+                for future in as_completed(futures):
+                    pid, window_start, window_end = futures[future]
+                    try:
+                        future.result()
+                        done.append((pid, window_start, window_end))
+                        print(
+                            f"  ✓ [{protocol_label}][{exchange}][{pid}] "
+                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)} "
+                            f"({len(done)}/{len(batch)})"
+                        )
+                    except Exception as e:
+                        print(
+                            f"  ✗ [{protocol_label}][{exchange}][{pid}] "
                             f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}: {e}"
                         )
                         done.append((pid, window_start, window_end))

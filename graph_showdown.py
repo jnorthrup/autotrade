@@ -579,6 +579,36 @@ def _fragment_signature(fragments_df: pd.DataFrame) -> Tuple[Tuple[str, str, int
     return tuple(signature)
 
 
+def _fragment_exact_plans(
+    fragments_df: pd.DataFrame,
+    subscriptions: List[Dict[str, str]],
+    *,
+    exchange: str,
+) -> List[Tuple[str, datetime, datetime]]:
+    if fragments_df.empty:
+        return []
+
+    allowed_keys = {
+        (str(sub["exchange"]), str(sub["product_id"]))
+        for sub in subscriptions
+        if str(sub["exchange"]) == exchange
+    }
+    plans: List[Tuple[str, datetime, datetime]] = []
+    ordered = fragments_df.sort_values(
+        ["fragment_start", "fragment_end", "exchange", "product_id"]
+    )
+    for row in ordered.itertuples(index=False):
+        pair_key = (str(row.exchange), str(row.product_id))
+        if pair_key not in allowed_keys:
+            continue
+        fragment_start = pd.Timestamp(row.fragment_start).to_pydatetime()
+        fragment_end = pd.Timestamp(row.fragment_end).to_pydatetime()
+        if fragment_start >= fragment_end:
+            continue
+        plans.append((str(row.product_id), fragment_start, fragment_end))
+    return plans
+
+
 def _drawthrough_repair_window(
     cache: CandleCache,
     subscriptions: List[Dict[str, str]],
@@ -597,11 +627,19 @@ def _drawthrough_repair_window(
 
     previous_signature: Tuple[Tuple[str, str, int, int, int], ...] = ()
     for pass_idx in range(1, max(max_passes, 1) + 1):
-        fragments_view = cache.materialize_bag_missing_fragments_view(
+        tail_view = cache.materialize_bag_tail_coverage_view(
             subscriptions,
             window_start,
             window_end,
             granularity=granularity,
+        )
+        tail_df = cache.read_bag_tail_coverage(tail_view)
+        fragments_view = cache.materialize_bag_tail_delta_fragments_view(
+            subscriptions,
+            window_start,
+            window_end,
+            granularity=granularity,
+            tail_view_name=tail_view,
         )
         fragments_df = cache.read_bag_missing_fragments(fragments_view)
         if fragments_df.empty:
@@ -620,18 +658,26 @@ def _drawthrough_repair_window(
 
         signature = _fragment_signature(fragments_df)
         missing_bars = int(fragments_df["missing_count"].sum())
-        fragment_windows = _group_fragment_fetch_windows(fragments_df)
-        straggler_groups = sum(
-            1 for _, _, group_subscriptions in fragment_windows
-            if len(group_subscriptions) < len(subscriptions)
+        groups_view = cache.materialize_bag_fragment_groups_view(
+            subscriptions,
+            window_start,
+            window_end,
+            granularity=granularity,
+            fragments_view_name=fragments_view,
         )
+        groups_df = cache.read_bag_fragment_groups(groups_view)
+        group_count = len(groups_df)
+        straggler_groups = int((groups_df["straggler_pairs"] > 0).sum()) if not groups_df.empty else 0
+        min_tail = int(tail_df["contiguous_tail_bars"].min()) if not tail_df.empty else 0
+        max_tail = int(tail_df["contiguous_tail_bars"].max()) if not tail_df.empty else 0
         print(
             f"[Coinbase week/live] {label} "
             f"pass={pass_idx}/{max(max_passes, 1)} "
             f"fragments={len(fragments_df)} "
             f"missing_bars={missing_bars} "
-            f"groups={len(fragment_windows)} "
+            f"groups={group_count} "
             f"stragglers={straggler_groups} "
+            f"tail_bars={min_tail}..{max_tail} "
             f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
         )
 
@@ -645,28 +691,35 @@ def _drawthrough_repair_window(
         previous_signature = signature
 
         fetched_any = False
-        for fetch_start_dt, fetch_end_dt, fetch_subscriptions in fragment_windows:
-            if fetch_start_dt >= fetch_end_dt or not fetch_subscriptions:
+        for row in groups_df.itertuples(index=False):
+            fetch_start_dt = pd.Timestamp(row.group_start).to_pydatetime()
+            fetch_end_dt = pd.Timestamp(row.group_end).to_pydatetime()
+            if fetch_start_dt >= fetch_end_dt:
                 continue
-            fetch_pairs = [
-                str(sub["product_id"])
-                for sub in fetch_subscriptions
-                if str(sub["exchange"]) == exchange
-            ]
-            if not fetch_pairs:
+            exact_plans = _fragment_exact_plans(
+                fragments_df[
+                    (pd.to_datetime(fragments_df["fragment_start"], errors="coerce") < pd.Timestamp(fetch_end_dt))
+                    & (pd.to_datetime(fragments_df["fragment_end"], errors="coerce") > pd.Timestamp(fetch_start_dt))
+                ],
+                subscriptions,
+                exchange=exchange,
+            )
+            if not exact_plans:
                 continue
+            fetch_pairs = sorted({pid for pid, _, _ in exact_plans})
             fetched_any = True
             print(
                 f"[Coinbase week/live] {label} fetch "
                 f"pairs={len(fetch_pairs)} "
+                f"fragments={len(exact_plans)} "
+                f"stragglers={int(row.straggler_pairs)} "
                 f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(fetch_end_dt)}"
             )
-            cache.backfill_http(
-                fetch_pairs,
-                fetch_start_dt,
-                fetch_end_dt,
+            cache.backfill_http_exact(
+                exact_plans,
                 granularity,
                 exchange=exchange,
+                protocol_label=f"HTTP {label}",
             )
 
         if not fetched_any:
