@@ -1,18 +1,56 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
+import json
 import random
+import threading
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import zstandard as zstd
 
 from hrm_model import HierarchicalReasoningModel
-from coin_graph import CoinGraph
+from coin_graph import (
+    CoinGraph,
+    EdgeState,
+    NodeState,
+    DEFAULT_MIN_PAIR_COVERAGE,
+)
 from config import Config
+from candle_cache import CandleCache, _floor_time_to_granularity, _utc_now_naive
 
 import duckdb
+from pool_client import PoolClient, pool_is_running
+
+# --- Pool routing helpers ---
+_pool_client_instance = None
+
+
+def _use_pool() -> bool:
+    """Check if the pool server is available."""
+    return pool_is_running()
+
+
+def _use_pool_for_db(db_path: str) -> bool:
+    """Only route through the shared pool for the canonical on-disk DB."""
+    try:
+        if not db_path or db_path == ":memory:":
+            return False
+        return _use_pool() and Path(db_path).resolve() == Path(Config.DB_PATH).resolve()
+    except Exception:
+        return False
+
+
+def _pool() -> PoolClient:
+    """Get or create the singleton PoolClient."""
+    global _pool_client_instance
+    if _pool_client_instance is None:
+        _pool_client_instance = PoolClient()
+    return _pool_client_instance
 
 # Square cube progression: hidden_size, always powers of 4
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
@@ -23,6 +61,8 @@ PLATEAU_PATIENCE = 3
 # Growth cycle for square cube: which dimension leads next
 # Cycle: h (hidden_size leads) -> H (H_layers catches up) -> L (L_layers catches up) -> h (cubed, cycle repeats)
 GROWTH_CYCLE = ['h', 'H', 'L']
+DEFAULT_TRAINING_DB_PATH = "training.duckdb"
+WALK_FORWARD_VALIDATION_FRACTION = 0.2
 
 
 def _next_square_cube_size(size: int) -> Optional[int]:
@@ -97,15 +137,445 @@ def _is_converged(losses: List[float]) -> bool:
     return True
 
 
+def _training_status(total_loss: float, n_updates: int) -> str:
+    if n_updates <= 0:
+        return "no scored updates; warmup or maturity never completed"
+    return f"avg_loss={total_loss / n_updates:.6f}, n_updates={n_updates}"
+
+
+def _print_profile_summary(profile_stats: Dict[str, float]):
+    print("Profile summary:")
+    print(
+        f"  device={profile_stats.get('device_type', 'unknown')} "
+        f"bars={int(profile_stats.get('bars_processed', 0))} "
+        f"updates={int(profile_stats.get('n_updates', 0))}"
+    )
+    print(
+        f"  graph.update={profile_stats.get('graph_update_seconds', 0.0):.4f}s "
+        f"update_prices={profile_stats.get('update_prices_seconds', 0.0):.4f}s "
+        f"predict_prepare={profile_stats.get('predict_prepare_seconds', 0.0):.4f}s "
+        f"predict_forward={profile_stats.get('predict_forward_seconds', 0.0):.4f}s"
+    )
+    print(
+        f"  update_prepare={profile_stats.get('update_prepare_seconds', 0.0):.4f}s "
+        f"update_forward_backward={profile_stats.get('update_forward_backward_seconds', 0.0):.4f}s "
+        f"predict_edges={int(profile_stats.get('predict_edges', 0))} "
+        f"update_edges={int(profile_stats.get('update_edges', 0))}"
+    )
+
+
+def _checkpoint_variant(path: str, tag: str) -> str:
+    checkpoint = Path(path)
+    suffix = checkpoint.suffix or ".pt"
+    return str(checkpoint.with_name(f"{checkpoint.stem}_{tag}{suffix}"))
+
+
+def _ensure_experiments_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS experiments (
+            timestamp TIMESTAMP DEFAULT now(),
+            val_bpb DOUBLE,
+            params VARCHAR,
+            bag_spec VARCHAR,
+            growth_phase VARCHAR,
+            model_cas VARCHAR
+        )
+        """
+    )
+    conn.execute("ALTER TABLE experiments ADD COLUMN IF NOT EXISTS model_cas VARCHAR")
+
+
+def _ensure_model_winners_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_winners (
+            checkpoint_sha256 VARCHAR PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT now(),
+            checkpoint_path VARCHAR,
+            checkpoint_type VARCHAR,
+            val_loss DOUBLE,
+            n_updates BIGINT,
+            params_json VARCHAR,
+            bag_spec_json VARCHAR,
+            model_cas VARCHAR,
+            checkpoint_size_bytes BIGINT,
+            checkpoint_blob_zstd BLOB
+        )
+        """
+    )
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS checkpoint_path VARCHAR")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS checkpoint_type VARCHAR")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS val_loss DOUBLE")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS n_updates BIGINT")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS params_json VARCHAR")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS bag_spec_json VARCHAR")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS model_cas VARCHAR")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS checkpoint_size_bytes BIGINT")
+    conn.execute("ALTER TABLE model_winners ADD COLUMN IF NOT EXISTS checkpoint_blob_zstd BLOB")
+
+
+def _publish_model_winner(
+    training_db_path: str,
+    checkpoint_path: str,
+    checkpoint_type: str,
+    val_loss: float,
+    n_updates: int,
+    params: Dict,
+    bag_spec: Dict,
+    model_cas: Optional[str],
+) -> str:
+    checkpoint = Path(checkpoint_path)
+    if not checkpoint.exists():
+        raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint_path}")
+
+    raw_bytes = checkpoint.read_bytes()
+    checkpoint_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    blob_zstd = zstd.ZstdCompressor(level=9).compress(raw_bytes)
+
+    with duckdb.connect(training_db_path) as conn:
+        _ensure_model_winners_table(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO model_winners (
+                checkpoint_sha256,
+                created_at,
+                checkpoint_path,
+                checkpoint_type,
+                val_loss,
+                n_updates,
+                params_json,
+                bag_spec_json,
+                model_cas,
+                checkpoint_size_bytes,
+                checkpoint_blob_zstd
+            )
+            VALUES (?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                checkpoint_sha256,
+                str(checkpoint.resolve()),
+                checkpoint_type,
+                val_loss,
+                n_updates,
+                json.dumps(params, sort_keys=True, default=str),
+                json.dumps(bag_spec, sort_keys=True, default=str),
+                model_cas,
+                len(raw_bytes),
+                blob_zstd,
+            ],
+        )
+
+    print(
+        f"[Winner publish] loss={val_loss:.6f} updates={n_updates} "
+        f"sha256={checkpoint_sha256} db={training_db_path}"
+    )
+    return checkpoint_sha256
+
+
+def _load_bag_subscriptions(bag_path: str) -> List[Dict[str, str]]:
+    with open(bag_path, "r") as f:
+        raw_entries = json.load(f)
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Bag file must contain a JSON list of subscriptions: {bag_path}")
+
+    deduped: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for idx, entry in enumerate(raw_entries):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Bag file entry {idx} must be an object with exchange and product_id: {entry!r}"
+            )
+        exchange = str(entry.get("exchange") or "").strip()
+        product_id = str(entry.get("product_id") or "").strip()
+        if not exchange or not product_id or "-" not in product_id:
+            raise ValueError(
+                f"Bag file entry {idx} must include explicit exchange and product_id: {entry!r}"
+            )
+        sub = {"exchange": exchange, "product_id": product_id}
+        deduped[(sub["exchange"], sub["product_id"])] = sub
+    return list(deduped.values())
+
+
+def _group_subscriptions_by_exchange(subscriptions: List[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+    for sub in subscriptions:
+        grouped.setdefault(sub["exchange"], []).append(sub)
+    return grouped
+
+
+def _log_bag_coverage_summary(label: str, statuses: List[Dict[str, object]]) -> Tuple[int, int]:
+    total = len(statuses)
+    covered = [status for status in statuses if bool(status["covered"])]
+    invalid = [status for status in statuses if not bool(status["covered"])]
+    print(f"[{label}] contiguous={len(covered)}/{total} subscriptions")
+    if invalid:
+        preview = ", ".join(
+            f"{status['exchange']}:{status['product_id']} ({float(status['coverage_ratio']):.3f})"
+            for status in invalid[:8]
+        )
+        print(f"[{label}] incomplete sample: {preview}")
+    return len(covered), len(invalid)
+
+
+def _load_selected_pair_graph(
+    selected_subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str = "300",
+    fee_rate: float = 0.001,
+    min_pair_coverage: float = DEFAULT_MIN_PAIR_COVERAGE,
+) -> CoinGraph:
+    cache = CandleCache(str(Config.DB_PATH))
+    graph = CoinGraph(fee_rate=fee_rate, min_pair_coverage=min_pair_coverage)
+    graph.cache = cache
+    requested_span = end - start
+    active_start = start
+    active_end = end
+
+    def _verify_window(window_start: datetime, window_end: datetime) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, str]]]:
+        window_statuses = cache.verify_bag_contiguous_coverage(
+            selected_subscriptions,
+            window_start,
+            window_end,
+            granularity=granularity,
+        )
+        window_invalid = [status for status in window_statuses if not bool(status["covered"])]
+        window_valid = [
+            {"exchange": str(status["exchange"]), "product_id": str(status["product_id"])}
+            for status in window_statuses
+            if bool(status["covered"])
+        ]
+        return window_statuses, window_invalid, window_valid
+
+    statuses, invalid, valid_subscriptions = _verify_window(active_start, active_end)
+    if not valid_subscriptions:
+        gran_sec = int(granularity)
+        dense_candidates = [
+            status
+            for status in statuses
+            if float(status["coverage_ratio"]) >= min_pair_coverage
+            and int(status["bad_gap_count"]) == 0
+            and status["last_timestamp"] is not None
+        ]
+        if dense_candidates:
+            shifted_end = min(
+                pd.Timestamp(status["last_timestamp"]).to_pydatetime() + timedelta(seconds=gran_sec)
+                for status in dense_candidates
+            )
+            shifted_start = shifted_end - requested_span
+            if shifted_end < active_end:
+                print(
+                    f"[SelectedGraph] shifting verified window back to "
+                    f"{shifted_start.isoformat()} -> {shifted_end.isoformat()} "
+                    f"to avoid uncovered trailing gap"
+                )
+                active_start, active_end = shifted_start, shifted_end
+                statuses, invalid, valid_subscriptions = _verify_window(active_start, active_end)
+    if invalid:
+        preview = ", ".join(
+            f"{status['exchange']}:{status['product_id']} ({float(status['coverage_ratio']):.3f})"
+            for status in invalid[:5]
+        )
+        print(
+            f"[SelectedGraph] dropping {len(invalid)}/{len(statuses)} subscriptions "
+            f"for incomplete contiguous coverage: {preview}"
+        )
+    if not valid_subscriptions:
+        raise RuntimeError(
+            f"No subscriptions passed contiguous coverage for the requested window; "
+            f"first failures: {preview if invalid else 'n/a'}"
+        )
+    if not statuses:
+        raise RuntimeError("No valid subscriptions available for bag surface materialization")
+
+    bag_state = cache.persist_bag_window_status(
+        selected_subscriptions,
+        statuses,
+        active_start,
+        active_end,
+        granularity=granularity,
+        min_coverage_ratio=min_pair_coverage,
+        bag_name="selected_graph",
+    )
+    graph.bag_id = bag_state["bag_id"]
+    graph.bag_window_id = bag_state["bag_window_id"]
+    graph.bag_thresholds_view_name = "bag_thresholds_v"
+    graph.bag_surface_name = cache.materialize_bag_surface_for_window(graph.bag_window_id)
+    surface_df = cache.read_bag_surface(graph.bag_surface_name)
+    status_by_key = {
+        (str(status["exchange"]), str(status["product_id"])): status
+        for status in statuses
+    }
+    materialized_subscriptions: List[Dict[str, str]] = []
+
+    for (exchange, pid), df in surface_df.groupby(["exchange", "product_id"], sort=False):
+        parts = pid.split("-", 1)
+        if len(parts) != 2:
+            continue
+        base, quote = parts
+        df = (
+            df.drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .set_index("timestamp")
+        )
+        if df.empty:
+            continue
+        coverage = float(status_by_key[(exchange, pid)]["coverage_ratio"])
+        graph.nodes.add(base)
+        graph.nodes.add(quote)
+        graph.edges[(exchange, base, quote)] = df
+        graph.edges[(exchange, quote, base)] = df
+        graph.edge_state[(exchange, base, quote)] = EdgeState()
+        graph.edge_state[(exchange, quote, base)] = EdgeState()
+        graph.node_state.setdefault(base, NodeState())
+        graph.node_state.setdefault(quote, NodeState())
+        graph.pair_coverage[f"{exchange}:{pid}"] = coverage
+        graph.pair_exchange[f"{exchange}:{pid}"] = exchange
+        materialized_subscriptions.append({"exchange": exchange, "product_id": pid})
+
+    graph.all_pairs = [f"{sub['exchange']}:{sub['product_id']}" for sub in materialized_subscriptions]
+    graph.bag_subscriptions = materialized_subscriptions
+
+    if "USD" in graph.nodes:
+        graph.nodes.discard("USD")
+        graph.nodes = {"USD"} | graph.nodes
+
+    graph._align_timestamps()
+    return graph
+
+
+def _replay_margin_bars(model: HierarchicalReasoningModel) -> int:
+    return max(model.y_depth + model.prediction_depth + 32, 256)
+
+
+def plan_walk_forward_split(
+    total_bars: int,
+    model: HierarchicalReasoningModel,
+    validation_fraction: float = WALK_FORWARD_VALIDATION_FRACTION,
+) -> Optional[Tuple[int, int, int]]:
+    min_train_bars = max(model.y_depth + model.prediction_depth + 64, 256)
+    min_validation_bars = max(model.prediction_depth + 32, 64)
+    if total_bars < (min_train_bars + min_validation_bars):
+        return None
+
+    validation_bars = max(min_validation_bars, int(total_bars * validation_fraction))
+    validation_bars = min(validation_bars, total_bars - min_train_bars)
+    if validation_bars < min_validation_bars:
+        return None
+
+    train_end_bar = total_bars - validation_bars
+    if train_end_bar < min_train_bars:
+        return None
+    return 0, train_end_bar, total_bars
+
+
+def _clone_graph_for_replay(graph: CoinGraph) -> CoinGraph:
+    clone = CoinGraph(fee_rate=graph.fee_rate, min_pair_coverage=graph.min_pair_coverage)
+    clone.all_pairs = list(graph.all_pairs)
+    clone.bag_subscriptions = list(getattr(graph, "bag_subscriptions", []))
+    clone.nodes = set(graph.nodes)
+    clone.common_timestamps = list(graph.common_timestamps)
+    for edge, df in graph.edges.items():
+        clone.edges[edge] = df
+        clone.edge_state[edge] = EdgeState()
+    for node in graph.node_state:
+        clone.node_state[node] = NodeState()
+    clone.pair_coverage = dict(getattr(graph, "pair_coverage", {}))
+    clone.pair_exchange = dict(getattr(graph, "pair_exchange", {}))
+    return clone
+
+
+def _clone_model_for_evaluation(
+    model: HierarchicalReasoningModel,
+    edge_names: List[Tuple[str, str]],
+) -> HierarchicalReasoningModel:
+    clone = HierarchicalReasoningModel(
+        n_edges=len(edge_names),
+        learning_rate=model._lr,
+        y_depth=model.y_depth,
+        x_pixels=model.x_pixels,
+        curvature=model.curvature,
+        h_dim=model.h_dim,
+        z_dim=model.z_dim,
+        prediction_depth=model.prediction_depth,
+        H_layers=model.H_layers,
+        L_layers=model.L_layers,
+        H_cycles=model.H_cycles,
+        L_cycles=model.L_cycles,
+        device=model.device_preference,
+    )
+    clone.register_edges(list(edge_names))
+    if model._model is not None and clone._model is not None:
+        clone._model.load_state_dict(model._model.state_dict())
+    return clone
+
+
+def run_walk_forward_validation(
+    graph: CoinGraph,
+    trained_model: HierarchicalReasoningModel,
+    validation_start_bar: int,
+    end_bar: Optional[int] = None,
+    warmup_start_bar: int = 0,
+    print_every: int = 0,
+) -> Tuple[Optional[float], int]:
+    if end_bar is None:
+        end_bar = len(graph.common_timestamps)
+    if validation_start_bar >= end_bar:
+        return None, 0
+
+    eval_graph = _clone_graph_for_replay(graph)
+    eval_model = _clone_model_for_evaluation(trained_model, list(graph.edges.keys()))
+
+    total_loss = 0.0
+    n_updates = 0
+    for bar_idx in range(warmup_start_bar, end_bar):
+        edge_accels, _, hit_ptt, hit_stop = eval_graph.update(bar_idx)
+        if not edge_accels:
+            continue
+
+        eval_model.update_prices(eval_graph, bar_idx)
+        if eval_model.ready_for_prediction(bar_idx):
+            eval_model.predict(eval_graph, bar_idx)
+
+        if not eval_model.ready_for_update(bar_idx, edge_accels):
+            continue
+
+        loss = eval_model.score(
+            eval_graph,
+            edge_accels,
+            bar_idx,
+            hit_ptt=hit_ptt,
+            hit_stop=hit_stop,
+        )
+        if loss is None or bar_idx < validation_start_bar:
+            continue
+
+        total_loss += loss
+        n_updates += 1
+        if print_every and n_updates % print_every == 0:
+            avg_loss = total_loss / n_updates
+            print(
+                f"[WalkForward] bar={bar_idx} avg_loss={avg_loss:.6f} "
+                f"updates={n_updates}"
+            )
+
+    if n_updates <= 0:
+        return None, 0
+    return total_loss / n_updates, n_updates
+
+
 def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar: int = 0,
                  end_bar: Optional[int] = None, print_every: int = 100,
-                 loss_history: Optional[List[float]] = None) -> Tuple[float, int, bool, List[float]]:
+                 loss_history: Optional[List[float]] = None,
+                 profile_stats: Optional[Dict[str, float]] = None) -> Tuple[float, int, bool, List[float]]:
     """Train model on graph bars. Returns (total_loss, n_updates, early_stopped, loss_history)."""
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
     
     if loss_history is None:
         loss_history = []
+
+    model.set_profile_enabled(profile_stats is not None)
     
     ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
     bars_with_data = set()
@@ -116,23 +586,30 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
     total_loss = 0.0
     n_updates = 0
     early_stopped = False
+    graph_update_seconds = 0.0
     
     sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
     print(f"Training on {len(sorted_bars)} bars with data")
     
+    loop_start = time.perf_counter() if profile_stats is not None else None
     for i, bar_idx in enumerate(sorted_bars):
         if bar_idx >= len(graph.common_timestamps):
             break
-        
+
+        graph_update_start = time.perf_counter() if profile_stats is not None else None
         edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
+        if graph_update_start is not None:
+            graph_update_seconds += time.perf_counter() - graph_update_start
         
         if not edge_accels:
             continue
+
+        model.update_prices(graph, bar_idx)
         
-        if bar_idx >= model.prediction_depth:
+        if model.ready_for_prediction(bar_idx):
             model.predict(graph, bar_idx)
         
-        if bar_idx >= model.prediction_depth * 2:
+        if model.ready_for_update(bar_idx, edge_accels):
             loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
             if loss is not None:
                 total_loss += loss
@@ -140,8 +617,20 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
                 loss_history.append(loss)
         
         if i % print_every == 0 and i > 0:
-            avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-            print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
+            if n_updates > 0:
+                avg_loss = total_loss / n_updates
+                print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
+            else:
+                print(f"Bar {bar_idx}: warmup, candle history/prediction queues not full yet")
+
+    if profile_stats is not None:
+        profile_stats.clear()
+        profile_stats.update(model.get_profile_stats())
+        profile_stats['graph_update_seconds'] = graph_update_seconds
+        profile_stats['bars_processed'] = float(len(sorted_bars))
+        profile_stats['bars_with_data'] = float(len(sorted_bars))
+        profile_stats['n_updates'] = float(n_updates)
+        profile_stats['loop_seconds'] = time.perf_counter() - loop_start if loop_start is not None else 0.0
     
     return total_loss, n_updates, early_stopped, loss_history
 
@@ -149,14 +638,81 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
 def _list_all_binance_pairs(db_path: str) -> List[str]:
     """List all Binance-style pairs available in candle_cache (DuckDB)."""
     try:
-        with duckdb.connect(db_path) as conn:
-            rows = conn.execute("SELECT DISTINCT product_id FROM candles").fetchall()
+        if _use_pool_for_db(db_path):
+            rows = _pool().execute("SELECT DISTINCT product_id FROM candles WHERE exchange = 'binance'")
             pairs = [r[0] for r in rows]
-            # Filter: must look like BASE-QUOTE with two parts
-            pairs = [p for p in pairs if "-" in p and len(p.split("-", 1)) == 2]
-            return sorted(set(pairs))
+        else:
+            with duckdb.connect(db_path) as conn:
+                rows = conn.execute("SELECT DISTINCT product_id FROM candles WHERE exchange = 'binance'").fetchall()
+                pairs = [r[0] for r in rows]
+        # Filter: must look like BASE-QUOTE with two parts
+        pairs = [p for p in pairs if "-" in p and len(p.split("-", 1)) == 2]
+        return sorted(set(pairs))
     except Exception as e:
         print(f"[_list_all_binance_pairs] error: {e}")
+        return []
+
+
+def _normalize_subscription_record(entry, default_exchange: Optional[str] = None) -> Optional[Dict[str, str]]:
+    if isinstance(entry, dict):
+        exchange = str(entry.get("exchange") or default_exchange or "").strip()
+        product_id = entry.get("product_id") or entry.get("pair") or entry.get("symbol")
+    elif isinstance(entry, str):
+        raw = entry.strip()
+        if not raw:
+            return None
+        if ":" in raw:
+            maybe_exchange, maybe_product = raw.split(":", 1)
+            if maybe_exchange and "-" in maybe_product:
+                exchange = maybe_exchange.strip()
+                product_id = maybe_product.strip()
+            else:
+                exchange = str(default_exchange or "").strip()
+                product_id = raw
+        else:
+            exchange = str(default_exchange or "").strip()
+            product_id = raw
+    else:
+        return None
+
+    product_id = str(product_id or "").strip()
+    if not exchange or "-" not in product_id:
+        return None
+    return {"exchange": exchange, "product_id": product_id}
+
+
+def _list_all_exchange_subscriptions(db_path: str, exchange: Optional[str] = None) -> List[Dict[str, str]]:
+    try:
+        if _use_pool_for_db(db_path):
+            if exchange is None:
+                rows = _pool().execute("SELECT DISTINCT exchange, product_id FROM candles")
+            else:
+                rows = _pool().execute(
+                    "SELECT DISTINCT exchange, product_id FROM candles WHERE exchange = ?",
+                    [exchange],
+                )
+            rows = list(rows)
+        else:
+            with duckdb.connect(db_path) as conn:
+                if exchange is None:
+                    rows = conn.execute("SELECT DISTINCT exchange, product_id FROM candles").fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT DISTINCT exchange, product_id FROM candles WHERE exchange = ?",
+                        [exchange],
+                    ).fetchall()
+        subscriptions = []
+        for row in rows:
+            if isinstance(row, tuple) and len(row) >= 2:
+                sub = _normalize_subscription_record({"exchange": row[0], "product_id": row[1]})
+                if sub is not None:
+                    subscriptions.append(sub)
+        deduped: Dict[Tuple[str, str], Dict[str, str]] = {}
+        for sub in subscriptions:
+            deduped[(sub["exchange"], sub["product_id"])] = sub
+        return list(deduped.values())
+    except Exception as e:
+        print(f"[_list_all_exchange_subscriptions] error: {e}")
         return []
 
 
@@ -168,45 +724,86 @@ FIAT_CURRENCIES = {
 
 def _compute_volatility_filter(
     db_path: str,
-    all_pairs: List[str],
+    all_pairs,
     lookback_days: int = 365,
     granularity: str = "300",
     min_velocity: float = 0.001,
-) -> List[str]:
+) -> List:
     """Filter pairs by mean |velocity| (log close/open) and drop fiat-fiat edges.
 
     Returns pairs with mean |velocity| >= min_velocity and no fiat-fiat edges.
     """
-    end = datetime.now()
+    end = _utc_now_naive()
     start = end - timedelta(days=lookback_days)
 
     filtered = []
-    with duckdb.connect(db_path) as conn:
-        for pid in all_pairs:
+    normalized_inputs = []
+    for entry in all_pairs or []:
+        sub = _normalize_subscription_record(entry)
+        if sub is None:
+            continue
+        normalized_inputs.append((entry, sub))
+
+    use_pool_flag = _use_pool_for_db(db_path)
+    pool = _pool() if use_pool_flag else None
+
+    if use_pool_flag:
+        for original, sub in normalized_inputs:
+            pid = sub["product_id"]
+            exchange = sub["exchange"]
             parts = pid.split("-", 1)
             if len(parts) != 2:
                 continue
             base, quote = parts
-            # Drop fiat-fiat edges
             if base in FIAT_CURRENCIES and quote in FIAT_CURRENCIES:
                 continue
-            # Compute mean |log(close/open)| over the lookback window
             try:
-                row = conn.execute(
+                rows = pool.execute(
                     """SELECT AVG(ABS(LN(close / NULLIF(open, 0))))
                        FROM candles
-                       WHERE product_id = ? AND granularity = ?
-                         AND timestamp BETWEEN ? AND ?
+                       WHERE exchange = ? AND product_id = ? AND granularity = ?
+                         AND timestamp >= ? AND timestamp < ?
                          AND open > 0 AND close > 0""",
-                    [pid, granularity, start, end],
-                ).fetchone()
-                mean_vel = row[0] if row and row[0] is not None else 0.0
+                    [exchange, pid, granularity, start, end],
+                )
+                mean_vel = rows[0][0] if rows and rows[0] and rows[0][0] is not None else 0.0
             except Exception:
                 mean_vel = 0.0
 
             if mean_vel >= min_velocity:
-                filtered.append(pid)
+                filtered.append(original)
+    else:
+        with duckdb.connect(db_path) as conn:
+            for original, sub in normalized_inputs:
+                pid = sub["product_id"]
+                exchange = sub["exchange"]
+                parts = pid.split("-", 1)
+                if len(parts) != 2:
+                    continue
+                base, quote = parts
+                if base in FIAT_CURRENCIES and quote in FIAT_CURRENCIES:
+                    continue
+                try:
+                    row = conn.execute(
+                        """SELECT AVG(ABS(LN(close / NULLIF(open, 0))))
+                           FROM candles
+                           WHERE exchange = ? AND product_id = ? AND granularity = ?
+                             AND timestamp >= ? AND timestamp < ?
+                             AND open > 0 AND close > 0""",
+                        [exchange, pid, granularity, start, end],
+                    ).fetchone()
+                    mean_vel = row[0] if row and row[0] is not None else 0.0
+                except Exception:
+                    mean_vel = 0.0
 
+                if mean_vel >= min_velocity:
+                    filtered.append(original)
+
+    if filtered and isinstance(filtered[0], dict):
+        deduped: Dict[Tuple[str, str], Dict[str, str]] = {}
+        for sub in filtered:
+            deduped[(sub["exchange"], sub["product_id"])] = sub
+        return list(deduped.values())
     return sorted(set(filtered))
 
 
@@ -292,20 +889,34 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
                       start_bar: int, end_bar: int) -> CoinGraph:
     from coin_graph import EdgeState, NodeState
     
-    trial = CoinGraph(fee_rate=full_graph.fee_rate)
-    trial.all_pairs = selected_pairs
+    trial = CoinGraph(
+        fee_rate=full_graph.fee_rate,
+        min_pair_coverage=getattr(full_graph, "min_pair_coverage", DEFAULT_MIN_PAIR_COVERAGE),
+    )
+    source_exchange = None
+    if getattr(full_graph, "bag_subscriptions", []):
+        source_exchange = full_graph.bag_subscriptions[0]["exchange"]
+    trial.all_pairs = list(selected_pairs)
+    trial.bag_subscriptions = (
+        [{"exchange": source_exchange, "product_id": pid} for pid in selected_pairs]
+        if source_exchange is not None
+        else []
+    )
 
     pair_to_edges = {}
-    for pid in full_graph.all_pairs:
+    for sub in getattr(full_graph, "bag_subscriptions", []):
+        pid = sub["product_id"]
+        exchange = sub["exchange"]
         parts = pid.split("-", 1)
         if len(parts) == 2:
-            pair_to_edges[pid] = (parts[0], parts[1])
+            pair_to_edges[(exchange, pid)] = (exchange, parts[0], parts[1])
 
     for pid in selected_pairs:
-        if pid not in pair_to_edges:
+        edge_key = pair_to_edges.get((source_exchange, pid)) if source_exchange is not None else None
+        if edge_key is None:
             continue
-        base, quote = pair_to_edges[pid]
-        for edge in [(base, quote), (quote, base)]:
+        exchange, base, quote = edge_key
+        for edge in [(exchange, base, quote), (exchange, quote, base)]:
             if edge in full_graph.edges:
                 trial.edges[edge] = full_graph.edges[edge]
                 trial.edge_state[edge] = EdgeState()
@@ -314,12 +925,19 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
         trial.node_state.setdefault(base, NodeState())
         trial.node_state.setdefault(quote, NodeState())
 
-    trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
+    if trial.edges and all(not callable(getattr(df, "index", None)) for df in trial.edges.values()):
+        trial._align_timestamps()
+        trial.common_timestamps = trial.common_timestamps[start_bar:end_bar]
+    else:
+        trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
     return trial
 
 
 def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
-                     exchange: str = 'coinbase', pm_mode: str = 'single_asset'):
+                     exchange: str = 'coinbase', pm_mode: str = 'single_asset',
+                     device: str = 'auto',
+                     checkpoint_path: Optional[str] = None,
+                     training_db_path: Optional[str] = None):
     """
     Autoresearch with Square Cube Progression + Stochastic Bag Sampling.
 
@@ -337,39 +955,59 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
     """
     print("Using HRMEdgePredictor for hierarchical reasoning")
 
-    conn = duckdb.connect(db_path)
+    use_pool_flag = _use_pool()
+    pool = _pool() if use_pool_flag else None
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS experiments (
-            timestamp TIMESTAMP DEFAULT now(),
-            val_bpb DOUBLE,
-            params VARCHAR,
-            bag_spec VARCHAR,
-            growth_phase VARCHAR
-        )
-    """)
+    if use_pool_flag:
+        _ensure_experiments_table(pool)
+    else:
+        conn = duckdb.connect(db_path)
+        _ensure_experiments_table(conn)
 
     best_bpb = float('inf')
     best_params = None
+    incumbent_checkpoint_path = checkpoint_path
+    best_checkpoint_path = _checkpoint_variant(checkpoint_path, "best") if checkpoint_path else None
+    grown_checkpoint_path = _checkpoint_variant(checkpoint_path, "grown") if checkpoint_path else None
 
     total_bars = len(graph.common_timestamps)
     rng = random.Random()
 
-    # --- Stochastic bag: load all available pairs from DB, then volatility-filter ---
-    all_db_pairs = _list_all_binance_pairs(db_path)
-    if all_db_pairs:
-        print(f"[StochasticBag] Found {len(all_db_pairs)} pairs in candle_cache")
-        filtered_pairs = _compute_volatility_filter(
-            db_path, all_db_pairs,
+    # --- Stochastic bag: load exchange-qualified subscriptions, then volatility-filter ---
+    all_db_subscriptions = _list_all_exchange_subscriptions(db_path, exchange=exchange)
+    if not all_db_subscriptions:
+        all_db_subscriptions = [
+            sub for sub in getattr(graph, "bag_subscriptions", [])
+            if sub.get("exchange") == exchange
+        ]
+    if all_db_subscriptions:
+        print(f"[StochasticBag] Found {len(all_db_subscriptions)} subscriptions in candle_cache")
+        filtered_subscriptions = _compute_volatility_filter(
+            db_path,
+            all_db_subscriptions,
             lookback_days=365 if exchange == "coinbase" else 1095,
             granularity="300",
             min_velocity=0.001,
         )
-        print(f"[StochasticBag] After volatility filter: {len(filtered_pairs)} pairs")
+        print(f"[StochasticBag] After volatility filter: {len(filtered_subscriptions)} subscriptions")
+        filtered_pairs = [sub["product_id"] for sub in filtered_subscriptions]
     else:
-        # Fallback to graph.all_pairs (from bag.json)
-        filtered_pairs = list(graph.all_pairs)
-        print(f"[StochasticBag] No DB pairs found, using graph.all_pairs ({len(filtered_pairs)} pairs)")
+        # Fallback to the graph's own bag subscriptions or legacy discovery IDs.
+        fallback_subscriptions = [
+            sub for sub in getattr(graph, "bag_subscriptions", [])
+            if sub.get("exchange") == exchange
+        ]
+        if not fallback_subscriptions:
+            fallback_subscriptions = []
+            for entry in graph.all_pairs:
+                sub = _normalize_subscription_record(entry, default_exchange=exchange)
+                if sub is not None and sub["exchange"] == exchange:
+                    fallback_subscriptions.append(sub)
+        filtered_pairs = [sub["product_id"] for sub in fallback_subscriptions]
+        print(
+            f"[StochasticBag] No DB subscriptions found, using graph bag/discovery "
+            f"({len(filtered_pairs)} pairs)"
+        )
 
     if not filtered_pairs:
         print("[StochasticBag] ERROR: no pairs available after filtering")
@@ -388,6 +1026,19 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
     L_layers = SQUARE_CUBE_SIZES[0]
     current_h_dim = hidden_size
     phase = 0
+
+    incumbent_checkpoint = Path(incumbent_checkpoint_path) if incumbent_checkpoint_path else None
+    if incumbent_checkpoint is not None and incumbent_checkpoint.exists():
+        seed_model = HierarchicalReasoningModel(device=device)
+        seed_model.load(str(incumbent_checkpoint))
+        hidden_size = seed_model.h_dim
+        H_layers = seed_model.H_layers
+        L_layers = seed_model.L_layers
+        current_h_dim = hidden_size
+        print(
+            f"Resuming autoresearch from {incumbent_checkpoint_path}: "
+            f"h={current_h_dim}, H={H_layers}, L={L_layers}"
+        )
 
     _validate_square_cube_state(hidden_size, H_layers, L_layers)
 
@@ -430,7 +1081,8 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
             curvature = random.uniform(0.5, 4.0)
             prediction_depth = random.choice([1, 2, 3, 5, 10])
 
-            print(f"\n=== Phase {phase} (p={progress:.2f}) ===")
+            print()
+            print(f"=== Phase {phase} (p={progress:.2f}) ===")
             print(f"  Square: hidden_size={current_h_dim}, H_layers={H_layers}, L_layers={L_layers}")
             print(f"  Bag: {n_pairs} pairs, {window_bars} bars ({window_days}d)")
 
@@ -447,43 +1099,111 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
                 L_layers=L_layers,
                 H_cycles=2,
                 L_cycles=2,
+                device=device,
             )
             model.register_edges(list(trial_graph.edges.keys()))
+            if incumbent_checkpoint is not None and incumbent_checkpoint.exists():
+                model.load(str(incumbent_checkpoint))
+                hidden_size = model.h_dim
+                H_layers = model.H_layers
+                L_layers = model.L_layers
+                current_h_dim = hidden_size
+                _validate_square_cube_state(hidden_size, H_layers, L_layers)
 
-            # Train with loss history tracking
+            split = plan_walk_forward_split(len(trial_graph.common_timestamps), model)
+            if split is None:
+                print("  Skipping: not enough bars for walk-forward train/validation split")
+                continue
+            _, train_end_bar, validation_end_bar = split
+            print(
+                f"  Walk-forward: train=0:{train_end_bar}, "
+                f"validate={train_end_bar}:{validation_end_bar}"
+            )
+
             loss_history = []
             total_loss, n_updates, _, loss_history = run_training(
-                trial_graph, model, print_every=1000, loss_history=loss_history
+                trial_graph,
+                model,
+                start_bar=0,
+                end_bar=train_end_bar,
+                print_every=1000,
+                loss_history=loss_history,
             )
+            train_bpb = (total_loss / n_updates) if n_updates > 0 else None
+            val_bpb, val_updates = run_walk_forward_validation(
+                trial_graph,
+                model,
+                validation_start_bar=train_end_bar,
+                end_bar=validation_end_bar,
+                warmup_start_bar=0,
+            )
+            model_cas = model.model_cas_signature()
+            if n_updates > 0 and incumbent_checkpoint_path:
+                model.save(
+                    incumbent_checkpoint_path,
+                    checkpoint_type=f"autoresearch_phase_{phase}",
+                )
 
-            if n_updates > 0:
-                val_bpb = total_loss / n_updates
-            else:
-                val_bpb = 999.0
-
+            params = {
+                'lr': lr, 'h_dim': current_h_dim,
+                'y_depth': y_depth, 'x_pixels': x_pixels,
+                'curvature': curvature, 'prediction_depth': prediction_depth,
+                'H_layers': H_layers, 'L_layers': L_layers,
+                'train_end_bar': train_end_bar,
+                'validation_start_bar': train_end_bar,
+                'validation_end_bar': validation_end_bar,
+            }
+            bag_spec = {
+                'n_pairs': n_pairs, 'window_bars': window_bars,
+                'window_days': window_days, 'start_bar': start_bar,
+                'selection_policy': 'stochastic_historical_universe',
+                'timestamp_policy': 'intersection',
+                'exchange': exchange,
+            }
             growth_dim = GROWTH_CYCLE[growth_idx]
-            print(f"  val_bpb={val_bpb:.6f} (Best: {best_bpb:.6f})")
+            if val_bpb is None:
+                print(
+                    f"  train={_training_status(total_loss, n_updates)} "
+                    f"walk_forward=n/a"
+                )
+            else:
+                train_text = f"{train_bpb:.6f}" if train_bpb is not None else "n/a"
+                print(
+                    f"  train_bpb={train_text} "
+                    f"walk_forward_bpb={val_bpb:.6f} "
+                    f"(updates={val_updates}, best={best_bpb:.6f})"
+                )
 
-            if val_bpb < best_bpb:
+            if val_bpb is not None and val_bpb < best_bpb:
                 best_bpb = val_bpb
-                params = {
-                    'lr': lr, 'h_dim': current_h_dim,
-                    'y_depth': y_depth, 'x_pixels': x_pixels,
-                    'curvature': curvature, 'prediction_depth': prediction_depth,
-                    'H_layers': H_layers, 'L_layers': L_layers,
-                }
-                bag_spec = {
-                    'n_pairs': n_pairs, 'window_bars': window_bars,
-                    'window_days': window_days, 'start_bar': start_bar
-                }
-                best_params = {**params, **bag_spec, 'growth_phase': f'{growth_dim}'}
+                best_params = {**params, **bag_spec, 'growth_phase': f'{growth_dim}', 'model_cas': model_cas}
                 print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
-                model.save("model_weights.pt")
+                if best_checkpoint_path:
+                    model.save(
+                        best_checkpoint_path,
+                        checkpoint_type=f"autoresearch_best_phase_{phase}",
+                    )
+                    if training_db_path:
+                        _publish_model_winner(
+                            training_db_path=training_db_path,
+                            checkpoint_path=best_checkpoint_path,
+                            checkpoint_type=f"autoresearch_best_phase_{phase}",
+                            val_loss=val_bpb,
+                            n_updates=val_updates,
+                            params=params,
+                            bag_spec=bag_spec,
+                            model_cas=model_cas,
+                        )
 
-            conn.execute(
-                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase) VALUES (now(), ?, ?, ?, ?)",
-                [val_bpb, str(params), str(bag_spec), growth_dim]
+            _insert_sql = (
+                "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase, model_cas)"
+                " VALUES (now(), ?, ?, ?, ?, ?)"
             )
+            _insert_params = [val_bpb, str(params), str(bag_spec), growth_dim, model_cas]
+            if use_pool_flag:
+                pool.execute(_insert_sql, _insert_params)
+            else:
+                conn.execute(_insert_sql, _insert_params)
 
             # Check for convergence and trigger growth
             if _is_converged(loss_history):
@@ -503,7 +1223,16 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
                         f"[h={old_h}, H={old_H}, L={old_L}] -> "
                         f"[h={current_h_dim}, H={H_layers}, L={L_layers}]"
                     )
-                    model.save("model_weights_grown.pt")
+                    if incumbent_checkpoint_path:
+                        model.save(
+                            incumbent_checkpoint_path,
+                            checkpoint_type=f"autoresearch_grown_phase_{phase}",
+                        )
+                    if grown_checkpoint_path:
+                        model.save(
+                            grown_checkpoint_path,
+                            checkpoint_type=f"autoresearch_grown_phase_{phase}",
+                        )
                 else:
                     print(
                         f"\n  *** CONVERGED -> NO GROWTH: {growth_dim} already at max "
@@ -518,15 +1247,354 @@ def run_autoresearch(graph: CoinGraph, db_path: str = 'candles.duckdb',
     return best_params
 
 
+def run_coinbase_week_http_then_live(
+    bag_path: str,
+    checkpoint_path: str,
+    training_db_path: Optional[str],
+    lookback_days: int,
+    granularity: str,
+    learning_rate: float,
+    y_depth: int,
+    x_pixels: int,
+    curvature: float,
+    prediction_depth: int,
+    h_dim: int,
+    z_dim: int,
+    device: str,
+    print_every: int,
+    save_checkpoint: bool,
+    live: bool,
+    live_train_interval: int,
+    live_http_repair_seconds: int,
+    live_http_overlap_candles: int,
+    live_idle_restart_seconds: int,
+):
+    selected_subscriptions = _load_bag_subscriptions(bag_path)
+    if not selected_subscriptions:
+        raise ValueError(f"No valid subscriptions found in {bag_path}")
+    selected_by_exchange = _group_subscriptions_by_exchange(selected_subscriptions)
+
+    cache = CandleCache(str(Config.DB_PATH))
+    bootstrap = cache.bootstrap_database(granularity=granularity)
+    print(
+        f"[Coinbase week/live bootstrap] db={bootstrap['db_path']} "
+        f"pool={bootstrap['pool_enabled']} "
+        f"normalized={bootstrap['normalized_timestamps']} "
+        f"purged={bootstrap['purged_future_rows']}"
+    )
+    initial_end = _floor_time_to_granularity(_utc_now_naive(), granularity)
+    initial_start = initial_end - timedelta(days=lookback_days)
+
+    subscription_summary = ", ".join(
+        f"{exchange}:{len(subs)}" for exchange, subs in sorted(selected_by_exchange.items())
+    )
+    print(
+        f"[Coinbase week/live] subscriptions={subscription_summary} "
+        f"pairs={len(selected_subscriptions)} "
+        f"window={initial_start.isoformat()} -> {initial_end.isoformat()} "
+        f"granularity={granularity} device={device}"
+    )
+
+    for exchange, subs in sorted(selected_by_exchange.items()):
+        pairs = [sub["product_id"] for sub in subs]
+        if exchange == "coinbase":
+            cache.backfill_http(pairs, initial_start, initial_end, granularity, exchange=exchange)
+            coinbase_statuses = cache.verify_bag_contiguous_coverage(
+                subs,
+                initial_start,
+                initial_end,
+                granularity=granularity,
+            )
+            _, invalid_count = _log_bag_coverage_summary("HTTP verify", coinbase_statuses)
+            if invalid_count:
+                retry_pairs = [
+                    str(status["product_id"])
+                    for status in coinbase_statuses
+                    if not bool(status["covered"])
+                ]
+                print(
+                    f"[HTTP verify] retrying {len(retry_pairs)} incomplete subscriptions via HTTP backfill"
+                )
+                cache.backfill_http(
+                    retry_pairs,
+                    initial_start,
+                    initial_end,
+                    granularity,
+                    exchange=exchange,
+                )
+                coinbase_statuses = cache.verify_bag_contiguous_coverage(
+                    subs,
+                    initial_start,
+                    initial_end,
+                    granularity=granularity,
+                )
+                _log_bag_coverage_summary("HTTP verify", coinbase_statuses)
+        elif exchange == "binance":
+            cache.import_binance_archive(pairs, granularity)
+        else:
+            raise NotImplementedError(f"Unsupported exchange in bag: {exchange}")
+
+    graph = _load_selected_pair_graph(
+        selected_subscriptions,
+        initial_start,
+        initial_end,
+        granularity=granularity,
+    )
+    if not graph.edges or not graph.common_timestamps:
+        raise RuntimeError("No candle data available after HTTP backfill")
+    selected_subscriptions = list(graph.bag_subscriptions)
+
+    model = HierarchicalReasoningModel(
+        n_edges=len(graph.edges),
+        learning_rate=learning_rate,
+        y_depth=y_depth,
+        x_pixels=x_pixels,
+        curvature=curvature,
+        h_dim=h_dim,
+        z_dim=z_dim,
+        prediction_depth=prediction_depth,
+        device=device,
+    )
+    model.register_edges(list(graph.edges.keys()))
+    model.load(checkpoint_path)
+
+    print(
+        f"[Coinbase week/live] training initial week: "
+        f"bars={len(graph.common_timestamps)} edges={len(graph.edges)}"
+    )
+    initial_split = plan_walk_forward_split(len(graph.common_timestamps), model)
+    if initial_split is None:
+        raise RuntimeError("Not enough bars for walk-forward validation in fixed-bag live mode")
+    _, initial_train_end_bar, initial_validation_end_bar = initial_split
+    total_loss, n_updates, _, _ = run_training(
+        graph,
+        model,
+        start_bar=0,
+        end_bar=initial_train_end_bar,
+        print_every=print_every,
+    )
+    avg_loss = (total_loss / n_updates) if n_updates > 0 else None
+    walk_forward_loss, walk_forward_updates = run_walk_forward_validation(
+        graph,
+        model,
+        validation_start_bar=initial_train_end_bar,
+        end_bar=initial_validation_end_bar,
+        warmup_start_bar=0,
+    )
+    best_loss = walk_forward_loss if walk_forward_loss is not None else float("inf")
+
+    week_params = {
+        "mode": "coinbase_week_http_then_live",
+        "lr": learning_rate,
+        "h_dim": model.h_dim,
+        "z_dim": model.z_dim,
+        "y_depth": model.y_depth,
+        "x_pixels": model.x_pixels,
+        "curvature": model.curvature,
+        "prediction_depth": model.prediction_depth,
+        "device": device,
+        "granularity": granularity,
+        "lookback_days": lookback_days,
+        "train_end_bar": initial_train_end_bar,
+        "validation_start_bar": initial_train_end_bar,
+        "validation_end_bar": initial_validation_end_bar,
+    }
+    week_bag_spec = {
+        "pairs": len(selected_subscriptions),
+        "subscriptions": selected_subscriptions,
+        "bag_path": str(Path(bag_path).resolve()),
+        "window_start": initial_start.isoformat(),
+        "window_end": initial_end.isoformat(),
+        "selection_policy": "explicit_fixed_bag",
+        "timestamp_policy": "intersection",
+    }
+
+    if n_updates > 0 and save_checkpoint:
+        model.save(checkpoint_path, checkpoint_type="coinbase_week_http")
+        print(f"[Coinbase week/live] saved checkpoint {checkpoint_path}")
+    if training_db_path:
+        print("[Coinbase week/live] fixed-bag path is adaptation-only; winner publication disabled")
+
+    if avg_loss is not None:
+        walk_text = (
+            f"{walk_forward_loss:.6f} updates={walk_forward_updates}"
+            if walk_forward_loss is not None
+            else "n/a"
+        )
+        print(
+            f"[Coinbase week/live] initial train_avg_loss={avg_loss:.6f} "
+            f"n_updates={n_updates} walk_forward={walk_text}"
+        )
+    else:
+        print("[Coinbase week/live] initial training produced no scored updates")
+
+    if not live:
+        return
+
+    coinbase_pairs = [sub["product_id"] for sub in selected_subscriptions if sub["exchange"] == "coinbase"]
+    if not coinbase_pairs:
+        raise NotImplementedError("Live streaming currently requires at least one coinbase subscription")
+
+    stop_event = threading.Event()
+    ingest_thread = threading.Thread(
+        target=cache.stream_live,
+        kwargs={
+            "pairs": coinbase_pairs,
+            "granularity": granularity,
+            "stop_event": stop_event,
+            "repair_every_seconds": live_http_repair_seconds,
+            "overlap_candles": live_http_overlap_candles,
+            "idle_restart_seconds": live_idle_restart_seconds,
+            "exchange": "coinbase",
+        },
+        daemon=True,
+    )
+    ingest_thread.start()
+
+    last_trained_bars = len(graph.common_timestamps)
+    last_trained_timestamp = graph.common_timestamps[-1]
+
+    try:
+        while True:
+            time.sleep(live_train_interval)
+            now = _floor_time_to_granularity(_utc_now_naive(), granularity)
+            purged = cache.purge_future_candles(granularity=granularity)
+            if purged:
+                print(f"[Coinbase live] purged {purged} poisoned future candles")
+            window_start = now - timedelta(days=lookback_days)
+            cache.repair_http_overlap(
+                coinbase_pairs,
+                granularity=granularity,
+                overlap_candles=live_http_overlap_candles,
+                end=now,
+                exchange="coinbase",
+            )
+            graph = _load_selected_pair_graph(
+                selected_subscriptions,
+                window_start,
+                now,
+                granularity=granularity,
+            )
+            total_bars = len(graph.common_timestamps)
+            if total_bars == 0:
+                print("[Coinbase live] no bars available after reload")
+                continue
+
+            latest_timestamp = graph.common_timestamps[-1]
+            if latest_timestamp <= last_trained_timestamp:
+                continue
+
+            model.register_edges(list(graph.edges.keys()))
+            start_bar = max(0, total_bars - _replay_margin_bars(model))
+            replay_split = plan_walk_forward_split(total_bars - start_bar, model)
+            if replay_split is None:
+                print("[Coinbase live] skipping cycle: not enough replay bars for walk-forward split")
+                last_trained_bars = total_bars
+                last_trained_timestamp = latest_timestamp
+                continue
+            _, train_end_rel, validation_end_rel = replay_split
+            train_end_bar = start_bar + train_end_rel
+            validation_end_bar = start_bar + validation_end_rel
+            print(
+                f"[Coinbase live] retraining bars {start_bar}:{train_end_bar} "
+                f"and validating {train_end_bar}:{validation_end_bar} "
+                f"({total_bars - start_bar} replay bars, last_trained={last_trained_bars}, "
+                f"latest_ts={latest_timestamp})"
+            )
+            total_loss, n_updates, _, _ = run_training(
+                graph,
+                model,
+                start_bar=start_bar,
+                end_bar=train_end_bar,
+                print_every=print_every,
+            )
+            if n_updates <= 0:
+                last_trained_bars = total_bars
+                last_trained_timestamp = latest_timestamp
+                print("[Coinbase live] no scored updates in this cycle")
+                continue
+
+            avg_loss = total_loss / n_updates
+            walk_forward_loss, walk_forward_updates = run_walk_forward_validation(
+                graph,
+                model,
+                validation_start_bar=train_end_bar,
+                end_bar=validation_end_bar,
+                warmup_start_bar=start_bar,
+            )
+            cycle_params = {
+                **week_params,
+                "h_dim": model.h_dim,
+                "z_dim": model.z_dim,
+                "cycle_window_start": window_start.isoformat(),
+                "cycle_window_end": now.isoformat(),
+                "start_bar": start_bar,
+                "train_end_bar": train_end_bar,
+                "validation_end_bar": validation_end_bar,
+            }
+            cycle_bag_spec = {
+                "pairs": len(selected_subscriptions),
+                "subscriptions": selected_subscriptions,
+                "bag_path": str(Path(bag_path).resolve()),
+                "window_start": window_start.isoformat(),
+                "window_end": now.isoformat(),
+                "total_bars": total_bars,
+                "selection_policy": "explicit_fixed_bag",
+                "timestamp_policy": "intersection",
+            }
+
+            if save_checkpoint or (
+                walk_forward_loss is not None and walk_forward_loss < best_loss
+            ):
+                model.save(checkpoint_path, checkpoint_type="coinbase_live")
+                print(f"[Coinbase live] saved checkpoint {checkpoint_path}")
+
+            if walk_forward_loss is not None and walk_forward_loss < best_loss:
+                best_loss = walk_forward_loss
+                print(
+                    f"[Coinbase live] new best walk_forward_loss={walk_forward_loss:.6f} "
+                    f"(train_avg_loss={avg_loss:.6f}, updates={walk_forward_updates})"
+                )
+                if training_db_path:
+                    print(
+                        "[Coinbase live] fixed-bag path is adaptation-only; "
+                        "winner publication disabled"
+                    )
+            else:
+                best_text = f"{best_loss:.6f}" if np.isfinite(best_loss) else "n/a"
+                walk_text = (
+                    f"{walk_forward_loss:.6f}"
+                    if walk_forward_loss is not None
+                    else "n/a"
+                )
+                print(
+                    f"[Coinbase live] train_avg_loss={avg_loss:.6f} "
+                    f"walk_forward_loss={walk_text} best={best_text}"
+                )
+
+            last_trained_bars = total_bars
+            last_trained_timestamp = latest_timestamp
+    except KeyboardInterrupt:
+        print("[Coinbase live] stopping")
+    finally:
+        stop_event.set()
+        ingest_thread.join(timeout=5.0)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--autoresearch', action='store_true')
+    parser.add_argument('--coinbase-week-http-then-live', action='store_true')
+    parser.add_argument('--live', action='store_true')
     parser.add_argument('--start-bar', type=int, default=0)
     parser.add_argument('--end-bar', type=int, default=None)
     parser.add_argument('--print-every', type=int, default=100)
     parser.add_argument('--min-partners', type=int, default=5)
     parser.add_argument('--max-partners', type=int, default=None)
     parser.add_argument('--skip-fetch', action='store_true')
+    parser.add_argument('--bag', type=str, default=str(Config.BAG_PATH))
+    parser.add_argument('--lookback-days', type=int, default=7)
+    parser.add_argument('--granularity', type=str, default="300")
     parser.add_argument('--exchange', type=str, default='coinbase', choices=['coinbase', 'binance'])
     parser.add_argument('--prediction-depth', type=int, default=1)
     parser.add_argument('--h-dim', type=int, default=4)
@@ -535,7 +1603,41 @@ def main():
     parser.add_argument('--y-depth', type=int, default=200)
     parser.add_argument('--x-pixels', type=int, default=20)
     parser.add_argument('--curvature', type=float, default=2.0)
+    parser.add_argument('--checkpoint-path', type=str, default='model_weights.pt')
+    parser.add_argument('--training-db-path', type=str, default=None)
+    parser.add_argument('--save-checkpoint', action='store_true')
+    parser.add_argument('--profile', action='store_true')
+    parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cpu', 'mps', 'cuda'])
+    parser.add_argument('--live-train-interval', type=int, default=60)
+    parser.add_argument('--live-http-repair-seconds', type=int, default=30)
+    parser.add_argument('--live-http-overlap-candles', type=int, default=6)
+    parser.add_argument('--live-idle-restart-seconds', type=int, default=90)
     args = parser.parse_args()
+
+    if args.coinbase_week_http_then_live:
+        run_coinbase_week_http_then_live(
+            bag_path=args.bag,
+            checkpoint_path=args.checkpoint_path,
+            training_db_path=args.training_db_path,
+            lookback_days=args.lookback_days,
+            granularity=args.granularity,
+            learning_rate=args.lr,
+            y_depth=args.y_depth,
+            x_pixels=args.x_pixels,
+            curvature=args.curvature,
+            prediction_depth=args.prediction_depth,
+            h_dim=args.h_dim,
+            z_dim=args.z_dim,
+            device=args.device,
+            print_every=args.print_every,
+            save_checkpoint=args.save_checkpoint,
+            live=args.live,
+            live_train_interval=args.live_train_interval,
+            live_http_repair_seconds=args.live_http_repair_seconds,
+            live_http_overlap_candles=args.live_http_overlap_candles,
+            live_idle_restart_seconds=args.live_idle_restart_seconds,
+        )
+        return
 
     print("Loading coin graph...")
     graph = CoinGraph(fee_rate=0.001)
@@ -560,29 +1662,40 @@ def main():
         curvature=args.curvature,
         h_dim=args.h_dim,
         z_dim=args.z_dim,
-        prediction_depth=args.prediction_depth
+        prediction_depth=args.prediction_depth,
+        device=args.device,
     )
     model.register_edges(list(graph.edges.keys()))
-    model.load("model_weights.pt")
+    model.load(args.checkpoint_path)
 
     db_path = str(Config.DB_PATH)
 
     if args.autoresearch:
-        run_autoresearch(graph, db_path=db_path, exchange=args.exchange)
+        run_autoresearch(
+            graph,
+            db_path=db_path,
+            exchange=args.exchange,
+            device=args.device,
+            checkpoint_path=args.checkpoint_path,
+            training_db_path=args.training_db_path,
+        )
     else:
         # Stochastic bag sampling for single training run (Binance mode)
         if args.exchange == "binance":
-            all_db_pairs = _list_all_binance_pairs(db_path)
-            if all_db_pairs:
+            all_db_subscriptions = _list_all_exchange_subscriptions(db_path, exchange=args.exchange)
+            if all_db_subscriptions:
                 filtered = _compute_volatility_filter(
-                    db_path, all_db_pairs,
+                    db_path, all_db_subscriptions,
                     lookback_days=1095, granularity="300", min_velocity=0.001,
                 )
-                print(f"[StochasticBag] Volatility-filtered: {len(filtered)} pairs (from {len(all_db_pairs)})")
+                print(
+                    f"[StochasticBag] Volatility-filtered: {len(filtered)} subscriptions "
+                    f"(from {len(all_db_subscriptions)})"
+                )
                 if filtered:
                     rng = random.Random()
                     sampled = _stochastic_bag_sample(
-                        filtered, args.h_dim, rng,
+                        [sub["product_id"] for sub in filtered], args.h_dim, rng,
                         min_pairs=5, max_pairs=len(filtered),
                     )
                     if sampled:
@@ -597,12 +1710,13 @@ def main():
                             skip_fetch=True,
                         )
                         # Filter graph edges to sampled pairs only
-                        sampled_set = set(sampled)
                         pair_to_edges = {}
-                        for pid in graph.all_pairs:
+                        for sub in getattr(graph, "bag_subscriptions", []):
+                            pid = sub["product_id"]
+                            sub_exchange = sub["exchange"]
                             parts = pid.split("-", 1)
                             if len(parts) == 2:
-                                pair_to_edges[pid] = (parts[0], parts[1])
+                                pair_to_edges[pid] = (sub_exchange, parts[0], parts[1])
                         from coin_graph import EdgeState, NodeState
                         new_edges = {}
                         new_edge_state = {}
@@ -611,8 +1725,8 @@ def main():
                         for pid in sampled:
                             if pid not in pair_to_edges:
                                 continue
-                            base, quote = pair_to_edges[pid]
-                            for edge in [(base, quote), (quote, base)]:
+                            edge_exchange, base, quote = pair_to_edges[pid]
+                            for edge in [(edge_exchange, base, quote), (edge_exchange, quote, base)]:
                                 if edge in graph.edges:
                                     new_edges[edge] = graph.edges[edge]
                                     new_edge_state[edge] = EdgeState()
@@ -625,6 +1739,7 @@ def main():
                             graph.edge_state = new_edge_state
                             graph.nodes = new_nodes
                             graph.node_state = new_node_state
+                            graph.bag_subscriptions = [{"exchange": args.exchange, "product_id": pid} for pid in sampled]
                             graph.all_pairs = sampled
                             graph._align_timestamps()
                             n_bars = len(graph.common_timestamps)
@@ -638,11 +1753,13 @@ def main():
                                 h_dim=args.h_dim,
                                 z_dim=args.z_dim,
                                 prediction_depth=args.prediction_depth,
+                                device=args.device,
                             )
                             model.register_edges(list(graph.edges.keys()))
-                            model.load("model_weights.pt")
+                            model.load(args.checkpoint_path)
 
         loss_history = []
+        profile_stats = {} if args.profile else None
         end_bar = args.end_bar if args.end_bar else min(n_bars, 10000)
         print(f"Training from bar {args.start_bar} to {end_bar}...")
 
@@ -651,12 +1768,20 @@ def main():
             start_bar=args.start_bar,
             end_bar=end_bar,
             print_every=args.print_every,
-            loss_history=loss_history
+            loss_history=loss_history,
+            profile_stats=profile_stats,
         )
 
-        avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-        print(f"\nDone: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
-        model.save("model_weights.pt")
+        print(f"\nDone: {_training_status(total_loss, n_updates)}")
+        if profile_stats is not None:
+            _print_profile_summary(profile_stats)
+        if args.save_checkpoint and n_updates > 0:
+            model.save(args.checkpoint_path)
+            print(f"Saved checkpoint to {args.checkpoint_path}")
+        elif args.save_checkpoint:
+            print(f"Skipped checkpoint save to {args.checkpoint_path}: no scored updates")
+        else:
+            print("Checkpoint not saved; pass --save-checkpoint for an intentional training run")
 
 
 if __name__ == "__main__":

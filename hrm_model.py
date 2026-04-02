@@ -15,10 +15,13 @@ Rotation Growth:
 - Square cube progression: hidden_size grows in sync with layers
 """
 
+import hashlib
+import json
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -26,14 +29,34 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+try:
+    import sympy  # noqa: F401
+except Exception:
+    sympy = None
+
 # Keep graph_showdown self-contained instead of reaching into the nested HRM repo.
 from layers_fallback import rms_norm, SwiGLU, Attention, RotaryEmbedding
 
 
-def get_device() -> torch.device:
-    """Return MPS device if available, else CPU."""
+def get_device(preferred: str = "auto") -> torch.device:
+    """Resolve the requested runtime device."""
+    choice = (preferred or "auto").lower()
+    if choice == "cpu":
+        return torch.device("cpu")
+    if choice == "mps":
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            return torch.device("mps")
+        raise RuntimeError("Requested device=mps but MPS is not available")
+    if choice == "cuda":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        raise RuntimeError("Requested device=cuda but CUDA is not available")
+    if choice != "auto":
+        raise ValueError(f"Unsupported device preference: {preferred}")
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
         return torch.device("mps")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("cpu")
 
 
@@ -56,9 +79,34 @@ def rotate_270(W: Tensor) -> Tensor:
     return torch.rot90(W, k=3, dims=(-2, -1))
 
 
+def _checkpoint_cas(metadata: Dict[str, object], state_dict: Dict[str, Tensor]) -> str:
+    """Hash checkpoint content into a stable content-addressable signature."""
+    hasher = hashlib.sha256()
+    hasher.update(CHECKPOINT_CAS_VERSION.encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    )
+    hasher.update(b"\0")
+
+    for name in sorted(state_dict.keys()):
+        tensor = state_dict[name].detach().cpu().contiguous()
+        hasher.update(name.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(str(tuple(tensor.shape)).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(str(tensor.dtype).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(tensor.numpy().tobytes())
+        hasher.update(b"\0")
+
+    return hasher.hexdigest()
+
+
 # ── Square cube sizes ──────────────────────────────────────────────────────────
 
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]  # hidden_size progression
+CHECKPOINT_CAS_VERSION = "hrm-checkpoint-v1"
 
 
 # ── HRM building blocks ───────────────────────────────────────────────────────
@@ -203,8 +251,8 @@ class HRMEdgePredictor(nn.Module):
     def init_carry(self, batch_size: int, device: torch.device) -> HRMEdgeCarry:
         """Initialize empty carry states."""
         return HRMEdgeCarry(
-            z_H=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.float32),
-            z_L=torch.empty(batch_size, 1, self.hidden_size, device=device, dtype=torch.float32),
+            z_H=self.H_init.view(1, 1, self.hidden_size).expand(batch_size, -1, -1).clone().to(device=device),
+            z_L=self.L_init.view(1, 1, self.hidden_size).expand(batch_size, -1, -1).clone().to(device=device),
         )
 
     def forward(
@@ -396,6 +444,7 @@ class HierarchicalReasoningModel:
         L_layers: int = 2,
         H_cycles: int = 2,
         L_cycles: int = 2,
+        device: str = "auto",
         **kwargs,
     ):
         self.y_depth = y_depth
@@ -409,29 +458,63 @@ class HierarchicalReasoningModel:
         self.L_layers = L_layers
         self.H_cycles = H_cycles
         self.L_cycles = L_cycles
+        self.device_preference = device
 
-        self.edge_names: List[Tuple[str, str]] = []
+        self.edge_names: List[Tuple[str, ...]] = []
         self.node_names: List[str] = []
         self.node_to_idx: Dict[str, int] = {}
 
         self._model: Optional[HRMEdgePredictor] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
-        self._device: torch.device = get_device()
+        self._device: torch.device = get_device(self.device_preference)
 
-        self._close_buffer: Dict[Tuple[str, str], List[float]] = {}
+        self._close_buffer: Dict[Tuple[str, ...], List[float]] = {}
         self._max_history = max(y_depth + 100, 500)
-        self._prediction_queue: Dict[Tuple[str, str], List] = {}
-        self._carry: Dict[Tuple[str, str], HRMEdgeCarry] = {}
+        self._prediction_queue: Dict[Tuple[str, ...], List] = {}
+        self._carry: Dict[Tuple[str, ...], HRMEdgeCarry] = {}
+        self._edge_observation_count: Dict[Tuple[str, ...], int] = {}
+        self._observed_edges_for_bar: List[Tuple[str, ...]] = []
+        self._last_price_bar_idx: Optional[int] = None
+        self._fisheye_boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
+        self._profile_enabled = False
+        self._profile_stats: Dict[str, float] = {}
+        self.reset_profile_stats()
+
+    def _checkpoint_metadata(self) -> Dict[str, object]:
+        return {
+            'model_class': 'HRMEdgePredictor',
+            'x_pixels': self.x_pixels,
+            'y_depth': self.y_depth,
+            'curvature': self.curvature,
+            'h_dim': self.h_dim,
+            'z_dim': self.z_dim,
+            'prediction_depth': self.prediction_depth,
+            'H_layers': self.H_layers,
+            'L_layers': self.L_layers,
+            'H_cycles': self.H_cycles,
+            'L_cycles': self.L_cycles,
+        }
+
+    def model_cas_signature(self) -> Optional[str]:
+        if self._model is None:
+            return None
+        return _checkpoint_cas(self._checkpoint_metadata(), self._model.state_dict())
 
     def _reset_edge_runtime_state(self):
+        self._close_buffer = {}
         self._prediction_queue = {}
         self._carry = {}
+        self._edge_observation_count = {}
+        self._observed_edges_for_bar = []
+        self._last_price_bar_idx = None
         for edge in self.edge_names:
+            self._close_buffer[edge] = []
             self._prediction_queue[edge] = []
             self._carry[edge] = None
+            self._edge_observation_count[edge] = 0
 
     def _build_model(self):
-        self._device = get_device()
+        self._device = get_device(self.device_preference)
         self._model = HRMEdgePredictor(
             x_pixels=self.x_pixels,
             hidden_size=self.h_dim,
@@ -491,12 +574,19 @@ class HierarchicalReasoningModel:
                 continue
             setattr(self, key, value)
         self._max_history = max(self.y_depth + 100, 500)
+        self._fisheye_boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
 
-    def register_edges(self, edges: List[Tuple[str, str]]):
+    def register_edges(self, edges: List[Tuple[str, ...]]):
         self.edge_names = edges
 
         node_set = set()
-        for base, quote in edges:
+        for edge in edges:
+            if len(edge) == 2:
+                base, quote = edge
+            elif len(edge) == 3:
+                _, base, quote = edge
+            else:
+                raise ValueError(f"Unsupported edge shape: {edge!r}")
             node_set.add(base)
             node_set.add(quote)
 
@@ -507,51 +597,192 @@ class HierarchicalReasoningModel:
             self.node_names = sorted(node_set)
 
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
-        self._build_model()
+        if self._model is None:
+            self._build_model()
+        else:
+            self._reset_edge_runtime_state()
 
-    def _get_fisheye(self, edge: Tuple[str, str]) -> List[float]:
+    def _get_fisheye(self, edge: Tuple[str, ...]) -> List[float]:
         closes = self._close_buffer.get(edge, [])
-        if len(closes) < 2:
+        if len(closes) < self.y_depth:
             return [0.0] * self.x_pixels
-        boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
-        closes_array = np.array(closes[-self.y_depth:])
-        values = fisheye_sample(closes_array, boundaries)
+        closes_array = np.asarray(closes[-self.y_depth:], dtype=np.float32)
+        values = fisheye_sample(closes_array, self._fisheye_boundaries)
         values = values[:self.x_pixels]
         while len(values) < self.x_pixels:
             values.append(0.0)
         return values
 
-    def update_prices(self, graph, bar_idx: int):
-        if bar_idx < 0:
+    def reset_profile_stats(self):
+        self._profile_stats = {
+            'bars_observed': 0.0,
+            'stale_frames_dropped': 0.0,
+            'update_prices_seconds': 0.0,
+            'predict_batches': 0.0,
+            'predict_edges': 0.0,
+            'predict_prepare_seconds': 0.0,
+            'predict_forward_seconds': 0.0,
+            'update_batches': 0.0,
+            'update_edges': 0.0,
+            'update_prepare_seconds': 0.0,
+            'update_forward_backward_seconds': 0.0,
+        }
+
+    def set_profile_enabled(self, enabled: bool):
+        self._profile_enabled = enabled
+        self.reset_profile_stats()
+
+    def get_profile_stats(self) -> Dict[str, float]:
+        stats = dict(self._profile_stats)
+        stats['device_type'] = self._device.type
+        return stats
+
+    def _record_profile(self, key: str, value: float):
+        if self._profile_enabled:
+            self._profile_stats[key] += value
+
+    def _sync_device_for_profile(self):
+        if not self._profile_enabled:
             return
-        import numpy as np
+        if self._device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+            torch.mps.synchronize()
+        elif self._device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(self._device)
+
+    def _edge_has_full_history(self, edge: Tuple[str, str]) -> bool:
+        return len(self._close_buffer.get(edge, [])) >= self.y_depth
+
+    def _prediction_ready_edges(self, bar_idx: Optional[int] = None) -> List[Tuple[str, str]]:
+        if bar_idx is not None and self._last_price_bar_idx != bar_idx:
+            return []
+        return [edge for edge in self._observed_edges_for_bar if self._edge_has_full_history(edge)]
+
+    def ready_for_prediction(self, bar_idx: Optional[int] = None) -> bool:
+        return bool(self._prediction_ready_edges(bar_idx))
+
+    def _drop_stale_predictions(self, edge: Tuple[str, str]):
+        queue = self._prediction_queue.get(edge, [])
+        observed = self._edge_observation_count.get(edge, 0)
+        dropped = 0
+        while queue and observed - queue[0]['observation_count'] > self.prediction_depth:
+            queue.pop(0)
+            dropped += 1
+        if dropped:
+            self._record_profile('stale_frames_dropped', float(dropped))
+
+    def _matured_prediction_frame(self, edge: Tuple[str, str]) -> Optional[Dict]:
+        self._drop_stale_predictions(edge)
+        queue = self._prediction_queue.get(edge, [])
+        if not queue:
+            return None
+        observed = self._edge_observation_count.get(edge, 0)
+        frame = queue[0]
+        if observed - frame['observation_count'] == self.prediction_depth:
+            return frame
+        return None
+
+    def ready_for_update(
+        self,
+        bar_idx: Optional[int] = None,
+        actual_accels: Optional[Dict[Tuple[str, str], float]] = None,
+    ) -> bool:
+        if bar_idx is not None and self._last_price_bar_idx != bar_idx:
+            return False
+        candidate_edges = actual_accels.keys() if actual_accels is not None else self._observed_edges_for_bar
+        return any(self._matured_prediction_frame(edge) is not None for edge in candidate_edges)
+
+    @staticmethod
+    def _slice_carry(carry: HRMEdgeCarry, idx: int) -> HRMEdgeCarry:
+        return HRMEdgeCarry(
+            z_H=carry.z_H[idx:idx + 1].detach().clone(),
+            z_L=carry.z_L[idx:idx + 1].detach().clone(),
+        )
+
+    @staticmethod
+    def _concat_carries(carries: Iterable[HRMEdgeCarry]) -> HRMEdgeCarry:
+        carry_list = list(carries)
+        return HRMEdgeCarry(
+            z_H=torch.cat([carry.z_H for carry in carry_list], dim=0),
+            z_L=torch.cat([carry.z_L for carry in carry_list], dim=0),
+        )
+
+    def _build_batch_carry(self, edges: List[Tuple[str, str]]) -> HRMEdgeCarry:
+        carry = self._model.init_carry(len(edges), self._device)
+        for idx, edge in enumerate(edges):
+            edge_carry = self._carry.get(edge)
+            if edge_carry is None:
+                continue
+            carry.z_H[idx:idx + 1] = edge_carry.z_H
+            carry.z_L[idx:idx + 1] = edge_carry.z_L
+        return carry
+
+    def update_prices(self, graph, bar_idx: int) -> List[Tuple[str, str]]:
+        start = time.perf_counter() if self._profile_enabled else None
+        if bar_idx < 0 or bar_idx >= len(graph.common_timestamps):
+            self._last_price_bar_idx = None
+            self._observed_edges_for_bar = []
+            return []
+        ts = graph.common_timestamps[bar_idx]
+        observed_edges = []
         for edge in self.edge_names:
-            if edge in graph.edges:
-                df = graph.edges[edge]
-                if bar_idx < len(df):
-                    close = float(df['close'].iloc[bar_idx])
-                    buf = self._close_buffer.get(edge, [])
-                    buf.append(close)
-                    if len(buf) > self._max_history:
-                        buf = buf[-self._max_history:]
-                    self._close_buffer[edge] = buf
+            df = graph.edges.get(edge)
+            if df is None or ts not in df.index:
+                continue
+            close_value = df.loc[ts, 'close']
+            if hasattr(close_value, 'iloc'):
+                close_value = close_value.iloc[-1]
+            close = float(close_value)
+            buf = self._close_buffer[edge]
+            buf.append(close)
+            if len(buf) > self._max_history:
+                del buf[:-self._max_history]
+            self._edge_observation_count[edge] += 1
+            observed_edges.append(edge)
+        self._last_price_bar_idx = bar_idx
+        self._observed_edges_for_bar = observed_edges
+        self._record_profile('bars_observed', 1.0)
+        if start is not None:
+            self._record_profile('update_prices_seconds', time.perf_counter() - start)
+        return observed_edges
 
     def predict(self, graph, bar_idx: int = -1) -> Dict[Tuple[str, str], Tuple[float, float, float]]:
         if not self.edge_names or self._model is None:
             return {}
 
-        predictions = {}
-        with torch.no_grad():
-            for edge in self.edge_names:
-                fisheye = torch.tensor(self._get_fisheye(edge), dtype=torch.float32, device=self._device).unsqueeze(0)  # (1, x_pixels)
-                fraction, ptt, stop, carry = self._model(fisheye, self._carry.get(edge))
-                f, p, s = float(fraction), float(ptt), float(stop)
-                predictions[edge] = (f, p, s)
-                self._carry[edge] = carry
-                self._prediction_queue[edge].append({'fisheye': self._get_fisheye(edge), 'bar_idx': bar_idx})
-                if len(self._prediction_queue[edge]) > self.prediction_depth:
-                    self._prediction_queue[edge] = self._prediction_queue[edge][-self.prediction_depth:]
+        ready_edges = self._prediction_ready_edges(bar_idx)
+        if not ready_edges:
+            return {}
 
+        prep_start = time.perf_counter() if self._profile_enabled else None
+        fisheye_rows = [self._get_fisheye(edge) for edge in ready_edges]
+        fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        input_carry = self._build_batch_carry(ready_edges)
+        if prep_start is not None:
+            self._record_profile('predict_prepare_seconds', time.perf_counter() - prep_start)
+
+        self._sync_device_for_profile()
+        fwd_start = time.perf_counter() if self._profile_enabled else None
+        with torch.no_grad():
+            fraction, ptt, stop, output_carry = self._model(fisheye_batch, input_carry)
+        self._sync_device_for_profile()
+        if fwd_start is not None:
+            self._record_profile('predict_forward_seconds', time.perf_counter() - fwd_start)
+        self._record_profile('predict_batches', 1.0)
+        self._record_profile('predict_edges', float(len(ready_edges)))
+
+        fractions = fraction.detach().cpu().tolist()
+        ptts = ptt.detach().cpu().tolist()
+        stops = stop.detach().cpu().tolist()
+        predictions = {}
+        for idx, edge in enumerate(ready_edges):
+            predictions[edge] = (float(fractions[idx]), float(ptts[idx]), float(stops[idx]))
+            self._carry[edge] = self._slice_carry(output_carry, idx)
+            self._prediction_queue[edge].append({
+                'fisheye': fisheye_rows[idx],
+                'bar_idx': bar_idx,
+                'observation_count': self._edge_observation_count[edge],
+                'carry': self._slice_carry(input_carry, idx),
+            })
         return predictions
 
     def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1,
@@ -559,23 +790,105 @@ class HierarchicalReasoningModel:
         if not self.edge_names or self._model is None or self._optimizer is None:
             return None
 
-        self.update_prices(graph, bar_idx)
+        if hit_ptt is None or hit_stop is None:
+            return None
+        if bar_idx >= 0 and self._last_price_bar_idx != bar_idx:
+            return None
+
+        prep_start = time.perf_counter() if self._profile_enabled else None
+        matured_edges: List[Tuple[str, str]] = []
+        fisheye_rows: List[List[float]] = []
+        carry_rows: List[HRMEdgeCarry] = []
+        frac_targets: List[float] = []
+        ptt_targets: List[float] = []
+        stop_targets: List[float] = []
+
+        for edge in actual_accels:
+            frame = self._matured_prediction_frame(edge)
+            if frame is None:
+                continue
+            ptt_target = 1.0 if hit_ptt.get(edge, False) else 0.0
+            stop_target = 1.0 if hit_stop.get(edge, False) else 0.0
+
+            if hit_ptt.get(edge, False):
+                frac_target = 1.0
+            elif hit_stop.get(edge, False):
+                frac_target = 0.0
+            else:
+                frac_target = 0.5
+
+            matured_edges.append(edge)
+            fisheye_rows.append(frame['fisheye'])
+            carry_rows.append(frame['carry'])
+            frac_targets.append(frac_target)
+            ptt_targets.append(ptt_target)
+            stop_targets.append(stop_target)
+
+        if not matured_edges:
+            return None
+
+        fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        carry_batch = self._concat_carries(carry_rows)
+        frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
+        ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
+        stop_targets_tensor = torch.as_tensor(np.asarray(stop_targets, dtype=np.float32), device=self._device)
+        if prep_start is not None:
+            self._record_profile('update_prepare_seconds', time.perf_counter() - prep_start)
+
+        self._optimizer.zero_grad(set_to_none=True)
+        self._sync_device_for_profile()
+        fwd_start = time.perf_counter() if self._profile_enabled else None
+        pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye_batch, carry_batch)
+        frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
+        ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
+        stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
+        loss = frac_loss + ptt_loss + stop_loss
+        loss.backward()
+        self._optimizer.step()
+        self._sync_device_for_profile()
+        if fwd_start is not None:
+            self._record_profile('update_forward_backward_seconds', time.perf_counter() - fwd_start)
+        self._record_profile('update_batches', 1.0)
+        self._record_profile('update_edges', float(len(matured_edges)))
+
+        for edge in matured_edges:
+            self._prediction_queue[edge].pop(0)
+        return float(loss.item())
+
+    def score(
+        self,
+        graph,
+        actual_accels: Dict[Tuple[str, str], float],
+        bar_idx: int = -1,
+        actual_velocities=None,
+        hit_ptt=None,
+        hit_stop=None,
+    ) -> Optional[float]:
+        """Score matured predictions without updating weights.
+
+        This is used for walk-forward holdout evaluation after training has
+        finished. Runtime queues still advance so the scorer can replay a
+        future segment sequentially.
+        """
+        if not self.edge_names or self._model is None:
+            return None
 
         if hit_ptt is None or hit_stop is None:
             return None
+        if bar_idx >= 0 and self._last_price_bar_idx != bar_idx:
+            return None
 
-        self._optimizer.zero_grad()
-        import numpy as np
+        matured_edges: List[Tuple[str, str]] = []
+        fisheye_rows: List[List[float]] = []
+        carry_rows: List[HRMEdgeCarry] = []
+        frac_targets: List[float] = []
+        ptt_targets: List[float] = []
+        stop_targets: List[float] = []
 
-        total_loss = torch.tensor(0.0, device=self._device)
-        n_scored = 0
-
-        for edge in self.edge_names:
-            queue = self._prediction_queue.get(edge, [])
-            if len(queue) < self.prediction_depth:
+        for edge in actual_accels:
+            frame = self._matured_prediction_frame(edge)
+            if frame is None:
                 continue
-
-            frame = queue[0]
 
             ptt_target = 1.0 if hit_ptt.get(edge, False) else 0.0
             stop_target = 1.0 if hit_stop.get(edge, False) else 0.0
@@ -587,22 +900,32 @@ class HierarchicalReasoningModel:
             else:
                 frac_target = 0.5
 
-            fisheye = torch.tensor(frame['fisheye'], dtype=torch.float32, device=self._device).unsqueeze(0)  # (1, x_pixels)
-            pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye)
+            matured_edges.append(edge)
+            fisheye_rows.append(frame['fisheye'])
+            carry_rows.append(frame['carry'])
+            frac_targets.append(frac_target)
+            ptt_targets.append(ptt_target)
+            stop_targets.append(stop_target)
 
-            frac_loss = F.binary_cross_entropy(pred_frac, torch.tensor([frac_target], device=self._device))
-            ptt_loss = F.binary_cross_entropy(pred_ptt, torch.tensor([ptt_target], device=self._device))
-            stop_loss = F.binary_cross_entropy(pred_stop, torch.tensor([stop_target], device=self._device))
+        if not matured_edges:
+            return None
 
-            total_loss = total_loss + frac_loss + ptt_loss + stop_loss
-            n_scored += 1
+        fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        carry_batch = self._concat_carries(carry_rows)
+        frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
+        ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
+        stop_targets_tensor = torch.as_tensor(np.asarray(stop_targets, dtype=np.float32), device=self._device)
 
-        if n_scored > 0:
-            loss = total_loss / n_scored
-            loss.backward()
-            self._optimizer.step()
-            return loss.item()
-        return 0.0
+        with torch.no_grad():
+            pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye_batch, carry_batch)
+            frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
+            ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
+            stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
+            loss = frac_loss + ptt_loss + stop_loss
+
+        for edge in matured_edges:
+            self._prediction_queue[edge].pop(0)
+        return float(loss.item())
 
     def high_level_plan(self, graph) -> Dict[str, str]:
         return {}
@@ -614,6 +937,7 @@ class HierarchicalReasoningModel:
         if self._model is None:
             return
         from datetime import datetime
+        model_cas = self.model_cas_signature()
         state = {
             'model': self._model.state_dict(),
             'x_pixels': self.x_pixels,
@@ -628,6 +952,7 @@ class HierarchicalReasoningModel:
             'L_cycles': self.L_cycles,
             'checkpoint_timestamp': datetime.now().isoformat(),
             'checkpoint_type': checkpoint_type,
+            'model_cas': model_cas,
         }
         torch.save(state, path)
 
@@ -649,18 +974,15 @@ class HierarchicalReasoningModel:
 
         self._apply_checkpoint_config(state)
 
-        if self.edge_names:
-            self._build_model()
-
-        if self._model is not None:
-            self._model.load_state_dict(state['model'])
-            print(
-                f"Loaded checkpoint {path}: "
-                f"x_pixels={self.x_pixels}, y_depth={self.y_depth}, "
-                f"h_dim={self.h_dim}, z_dim={self.z_dim}, "
-                f"H_layers={self.H_layers}, L_layers={self.L_layers}, "
-                f"prediction_depth={self.prediction_depth}"
-            )
+        self._build_model()
+        self._model.load_state_dict(state['model'])
+        print(
+            f"Loaded checkpoint {path}: "
+            f"x_pixels={self.x_pixels}, y_depth={self.y_depth}, "
+            f"h_dim={self.h_dim}, z_dim={self.z_dim}, "
+            f"H_layers={self.H_layers}, L_layers={self.L_layers}, "
+            f"prediction_depth={self.prediction_depth}"
+        )
 
     def grow(self, dim: str):
         """Grow one dimension by 4× using rotational expansion.

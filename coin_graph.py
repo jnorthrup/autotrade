@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -7,7 +8,97 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from candle_cache import CandleCache
+from candle_cache import CandleCache, _utc_now_naive
+from pool_client import PoolClient, pool_is_running, DEFAULT_SOCKET
+
+DEFAULT_MIN_PAIR_COVERAGE = 0.9
+
+
+def _use_pool() -> bool:
+    """True if literbike pool server is running and responsive."""
+    try:
+        return pool_is_running()
+    except Exception:
+        return False
+
+
+def _pool() -> PoolClient:
+    """Get a PoolClient connected to the shared server."""
+    return PoolClient(DEFAULT_SOCKET)
+
+
+def _adjacency_from_products(product_ids: List[str]) -> Tuple[Set[str], Dict[str, Set[str]]]:
+    real_products: Set[str] = set()
+    adjacency: Dict[str, Set[str]] = {}
+    for pid in product_ids:
+        parts = pid.split("-", 1)
+        if len(parts) != 2:
+            continue
+        base, quote = parts
+        real_products.add(pid)
+        adjacency.setdefault(base, set()).add(quote)
+        adjacency.setdefault(quote, set()).add(base)
+    return real_products, adjacency
+
+
+def _normalize_bag_subscription(entry, default_exchange: Optional[str] = None) -> Optional[Dict[str, str]]:
+    if isinstance(entry, dict):
+        exchange = str(entry.get("exchange") or default_exchange or "").strip()
+        product_id = entry.get("product_id") or entry.get("pair") or entry.get("symbol")
+    elif isinstance(entry, str):
+        raw = entry.strip()
+        if not raw:
+            return None
+        if ":" in raw:
+            maybe_exchange, maybe_product = raw.split(":", 1)
+            if maybe_exchange and "-" in maybe_product:
+                exchange = maybe_exchange.strip()
+                product_id = maybe_product.strip()
+            else:
+                exchange = str(default_exchange or "").strip()
+                product_id = raw
+        else:
+            exchange = str(default_exchange or "").strip()
+            product_id = raw
+    else:
+        return None
+
+    product_id = str(product_id or "").strip()
+    if not exchange or "-" not in product_id:
+        return None
+    return {"exchange": exchange, "product_id": product_id}
+
+
+def _normalize_bag_subscriptions(entries, default_exchange: Optional[str] = None) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for entry in entries or []:
+        sub = _normalize_bag_subscription(entry, default_exchange=default_exchange)
+        if sub is not None:
+            normalized.append(sub)
+    return normalized
+
+
+def _load_explicit_bag_subscriptions(bag_path: str) -> List[Dict[str, str]]:
+    with open(bag_path, "r") as f:
+        raw_entries = json.load(f)
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"Bag file must contain a JSON list of subscriptions: {bag_path}")
+
+    deduped: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for idx, entry in enumerate(raw_entries):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Bag file entry {idx} must be an object with exchange and product_id: {entry!r}"
+            )
+        exchange = str(entry.get("exchange") or "").strip()
+        product_id = str(entry.get("product_id") or "").strip()
+        if not exchange or not product_id or "-" not in product_id:
+            raise ValueError(
+                f"Bag file entry {idx} must include explicit exchange and product_id: {entry!r}"
+            )
+        sub = {"exchange": exchange, "product_id": product_id}
+        deduped[(exchange, product_id)] = sub
+    return list(deduped.values())
 
 
 @dataclass
@@ -25,54 +116,86 @@ class NodeState:
 
 
 class CoinGraph:
-    def __init__(self, fee_rate: float = 0.001):
+    def __init__(self, fee_rate: float = 0.001, min_pair_coverage: float = DEFAULT_MIN_PAIR_COVERAGE):
         self.fee_rate = fee_rate
+        self.min_pair_coverage = min_pair_coverage
         self.nodes: Set[str] = set()
         self.all_pairs: List[str] = []
-        self.edges: Dict[Tuple[str, str], pd.DataFrame] = {}
-        self.edge_state: Dict[Tuple[str, str], EdgeState] = {}
+        self.bag_subscriptions: List[Dict[str, str]] = []
+        self.edges: Dict[Tuple[str, str, str], pd.DataFrame] = {}
+        self.edge_state: Dict[Tuple[str, str, str], EdgeState] = {}
         self.node_state: Dict[str, NodeState] = {}
         self.common_timestamps: List[pd.Timestamp] = []
-        self._volatility: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self.pair_coverage: Dict[str, float] = {}
+        self.pair_exchange: Dict[str, str] = {}
+        self.bag_id: Optional[str] = None
+        self.bag_window_id: Optional[str] = None
+        self.bag_surface_name: Optional[str] = None
+        self.bag_thresholds_view_name: Optional[str] = None
+        self._volatility: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
         self._vol_window = 20
 
     def load(self, db_path: Optional[str] = None, granularity: str = None,
              min_partners: int = 5, max_partners: Optional[int] = None,
              lookback_days: int = 365, refresh_bag: bool = False,
-             exchange: str = "coinbase", skip_fetch: bool = False) -> int:
+             exchange: str = "coinbase", skip_fetch: bool = False,
+             drawthrough_fetch: bool = False, use_cached_bag: bool = False,
+             persist_bag: bool = False, min_pair_coverage: Optional[float] = None) -> int:
         db_path = db_path or str(Config.DB_PATH)
         granularity = granularity or Config.DEFAULT_GRANULARITY
+        min_pair_coverage = (
+            self.min_pair_coverage if min_pair_coverage is None else min_pair_coverage
+        )
 
         self.cache = CandleCache(db_path)
+        bootstrap = self.cache.bootstrap_database(
+            granularity=granularity,
+            exchange=exchange,
+        )
+        if bootstrap["normalized_timestamps"] or bootstrap["purged_future_rows"]:
+            print(
+                f"[CoinGraph bootstrap] normalized={bootstrap['normalized_timestamps']} "
+                f"purged={bootstrap['purged_future_rows']} "
+                f"exchange={exchange} granularity={granularity}"
+            )
+        end = _utc_now_naive()
+        start = end - timedelta(days=lookback_days)
 
-        pairs = []
-        if not refresh_bag and Config.BAG_PATH.exists():
-            try:
-                import json
-                with open(Config.BAG_PATH, 'r') as f:
-                    pairs = json.load(f)
-                print(f"Loaded bag of {len(pairs)} pairs from {Config.BAG_PATH}")
-            except Exception as e:
-                print(f"Error loading bag: {e}")
-                pairs = []
+        bag_subscriptions: List[Dict[str, str]] = []
+        if use_cached_bag and not refresh_bag and Config.BAG_PATH.exists():
+            bag_subscriptions = _load_explicit_bag_subscriptions(str(Config.BAG_PATH))
+            print(f"Loaded bag of {len(bag_subscriptions)} subscriptions from {Config.BAG_PATH}")
 
-        if not pairs:
-            if exchange == "binance":
+        if not bag_subscriptions:
+            historical_pairs = self.cache.historical_products(
+                start,
+                end,
+                granularity=granularity,
+                exchange=exchange,
+                min_coverage_ratio=min_pair_coverage,
+            )
+            pairs: List[str] = []
+            if historical_pairs:
+                real_products, adjacency = _adjacency_from_products(historical_pairs)
+                print(
+                    f"[CoinGraph] using historical universe from DuckDB "
+                    f"({len(real_products)} products, coverage>={min_pair_coverage:.2f})"
+                )
+            elif exchange == "binance":
                 real_products = set()
                 adjacency = {}
                 try:
-                    import duckdb
-                    with duckdb.connect(db_path, read_only=True) as conn:
-                        rows = conn.execute("SELECT DISTINCT product_id FROM candles").fetchall()
-                        for r in rows:
-                            pid = r[0]
-                            parts = pid.split("-", 1)
-                            if len(parts) != 2:
-                                continue
-                            base, quote = parts
-                            real_products.add(pid)
-                            adjacency.setdefault(base, set()).add(quote)
-                            adjacency.setdefault(quote, set()).add(base)
+                    if _use_pool():
+                        rows = _pool().execute("SELECT DISTINCT product_id FROM candles WHERE exchange = ?", [exchange])
+                        real_products, adjacency = _adjacency_from_products([r[0] for r in rows])
+                    else:
+                        import duckdb
+                        with duckdb.connect(db_path) as conn:
+                            rows = conn.execute(
+                                "SELECT DISTINCT product_id FROM candles WHERE exchange = ?",
+                                [exchange],
+                            ).fetchall()
+                            real_products, adjacency = _adjacency_from_products([r[0] for r in rows])
                 except Exception as e:
                     print(f"Error reading products from DuckDB: {e}")
                     real_products = set()
@@ -84,13 +207,9 @@ class CoinGraph:
                 for p in resp.products:
                     if p.status != "online" or p.trading_disabled:
                         continue
-                    parts = p.product_id.split("-", 1)
-                    if len(parts) != 2:
-                        continue
-                    base, quote = parts
-                    real_products.add(p.product_id)
-                    adjacency.setdefault(base, set()).add(quote)
-                    adjacency.setdefault(quote, set()).add(base)
+                    pid = p.product_id
+                    real_products.add(pid)
+                real_products, adjacency = _adjacency_from_products(sorted(real_products))
 
             coin_set = {
                 c for c, partners in adjacency.items() 
@@ -114,59 +233,178 @@ class CoinGraph:
                     if canonical not in seen:
                         seen.add(canonical)
                         pairs.append(pid)
+
+            if not pairs and historical_pairs:
+                print(
+                    "[CoinGraph] historical universe did not satisfy partner filter; "
+                    "relaxing to available historical pairs"
+                )
+                seen.clear()
+                for pid in real_products:
+                    base, quote = pid.split("-", 1)
+                    if quote in FIAT_EXCLUDE or base in FIAT_EXCLUDE:
+                        continue
+                    if quote in ("USDC", "USDT") and base in usd_bases:
+                        continue
+                    canonical = tuple(sorted([base, quote]))
+                    if canonical not in seen:
+                        seen.add(canonical)
+                        pairs.append(pid)
             
-            try:
-                import json
-                with open(Config.BAG_PATH, 'w') as f:
-                    json.dump(pairs, f, indent=4)
-                print(f"Saved bag of {len(pairs)} pairs to {Config.BAG_PATH}")
-            except Exception as e:
-                print(f"Error saving bag: {e}")
+            if persist_bag:
+                try:
+                    import json
+                    with open(Config.BAG_PATH, 'w') as f:
+                        json.dump(
+                            [{"exchange": exchange, "product_id": pid} for pid in pairs],
+                            f,
+                            indent=4,
+                        )
+                    print(f"Saved bag of {len(pairs)} subscriptions to {Config.BAG_PATH}")
+                except Exception as e:
+                    print(f"Error saving bag: {e}")
+            bag_subscriptions = [{"exchange": exchange, "product_id": pid} for pid in pairs]
 
-        self.all_pairs = pairs
-        print(f"Graph discovery: {len(pairs)} pairs")
+        self.bag_subscriptions = bag_subscriptions
+        self.pair_exchange = {}
 
-        end = datetime.now()
-        start = end - timedelta(days=lookback_days)
-        cached_pairs = set(self.cache.cached_products_in_range(pairs, start, end, granularity))
-        missing_pairs = [pid for pid in pairs if pid not in cached_pairs]
+        pairs_by_exchange: Dict[str, List[str]] = defaultdict(list)
+        for sub in bag_subscriptions:
+            pairs_by_exchange[sub["exchange"]].append(sub["product_id"])
 
-        if skip_fetch:
-            pass
-        elif exchange == "binance":
-            print("[CoinGraph] Binance mode: importing archive CSVs into DuckDB")
-            pairs = self.cache.import_binance_archive(missing_pairs or pairs, granularity)
-        elif not missing_pairs:
-            print("[CoinGraph] Local DuckDB already covers requested range; skipping fetch")
-        elif Config.USE_WS_ONLY:
-            print("[CoinGraph] USE_WS_ONLY: ws_snapshot")
-            try:
-                self.cache.ws_snapshot(missing_pairs, granularity)
-            except Exception as e:
-                print(f"[CoinGraph] WS snapshot failed: {e}")
-        elif lookback_days <= 2:
-            self.cache.ws_snapshot(missing_pairs, granularity)
-        else:
-            try:
-                self.cache.ws_snapshot(missing_pairs, granularity)
-            except Exception as e:
-                print(f"[CoinGraph] WS snapshot failed: {e}")
-            self.cache.prefetch_all(missing_pairs, start, end, granularity)
+        total_pairs = sum(len(v) for v in pairs_by_exchange.values())
+        print(f"Graph discovery: {total_pairs} pairs across {len(pairs_by_exchange)} exchanges")
 
-        for product_id in pairs:
-            base, quote = product_id.split("-", 1)
-            df = self.cache.get_candles(product_id, start, end, granularity)
-            if df.empty:
+        if not skip_fetch:
+            for bag_exchange, bag_pairs in pairs_by_exchange.items():
+                cached_pairs = set(
+                    self.cache.cached_products_in_range(
+                        bag_pairs,
+                        start,
+                        end,
+                        granularity,
+                        exchange=bag_exchange,
+                    )
+                )
+                missing_pairs = [pid for pid in bag_pairs if pid not in cached_pairs]
+
+                if bag_exchange == "binance":
+                    if missing_pairs or bag_pairs:
+                        print("[CoinGraph] Binance mode: importing archive CSVs into DuckDB")
+                        self.cache.import_binance_archive(missing_pairs or bag_pairs, granularity)
+                    continue
+
+                if not missing_pairs:
+                    print(f"[CoinGraph] {bag_exchange}: local DuckDB already covers requested range; skipping fetch")
+                    continue
+                if Config.USE_WS_ONLY:
+                    print(f"[CoinGraph] {bag_exchange}: USE_WS_ONLY: ws_snapshot")
+                    try:
+                        self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
+                    except Exception as e:
+                        print(f"[CoinGraph] WS snapshot failed: {e}")
+                elif lookback_days <= 2:
+                    self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
+                elif drawthrough_fetch:
+                    print(
+                        f"[CoinGraph] {bag_exchange}: draw-through fetch: seeding snapshot and backfilling "
+                        f"{len(missing_pairs)} missing pairs in background"
+                    )
+                    try:
+                        self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
+                    except Exception as e:
+                        print(f"[CoinGraph] WS snapshot failed: {e}")
+                    self.cache.prefetch_all_async(
+                        missing_pairs,
+                        start,
+                        end,
+                        granularity,
+                        name=f"drawthrough-{bag_exchange}-{granularity}",
+                        exchange=bag_exchange,
+                    )
+                else:
+                    try:
+                        self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
+                    except Exception as e:
+                        print(f"[CoinGraph] WS snapshot failed: {e}")
+                    self.cache.prefetch_all(missing_pairs, start, end, granularity, exchange=bag_exchange)
+
+        statuses = self.cache.verify_bag_contiguous_coverage(
+            bag_subscriptions,
+            start,
+            end,
+            granularity=granularity,
+        )
+        status_by_key = {
+            (str(status["exchange"]), str(status["product_id"])): status
+            for status in statuses
+        }
+        valid_subscriptions: List[Dict[str, str]] = []
+        for sub in bag_subscriptions:
+            status = status_by_key.get((sub["exchange"], sub["product_id"]))
+            if status is None or not bool(status["covered"]):
+                coverage = 0.0 if status is None else float(status["coverage_ratio"])
+                print(
+                    f"[CoinGraph] dropping {sub['exchange']}:{sub['product_id']}: "
+                    f"coverage={coverage:.3f} below contiguous minimum {min_pair_coverage:.3f}"
+                )
                 continue
-            df = df.set_index('timestamp')
+            valid_subscriptions.append(sub)
+
+        self.bag_id = None
+        self.bag_window_id = None
+        self.bag_thresholds_view_name = None
+        self.bag_surface_name = None
+        if statuses:
+            bag_state = self.cache.persist_bag_window_status(
+                bag_subscriptions,
+                statuses,
+                start,
+                end,
+                granularity=granularity,
+                min_coverage_ratio=min_pair_coverage,
+                bag_name="coin_graph",
+            )
+            self.bag_id = bag_state["bag_id"]
+            self.bag_window_id = bag_state["bag_window_id"]
+            self.bag_thresholds_view_name = "bag_thresholds_v"
+        if valid_subscriptions and self.bag_window_id is not None:
+            self.bag_surface_name = self.cache.materialize_bag_surface_for_window(
+                self.bag_window_id
+            )
+            surface_df = self.cache.read_bag_surface(self.bag_surface_name)
+        else:
+            surface_df = pd.DataFrame()
+
+        valid_pairs: List[str] = []
+        if not surface_df.empty:
+            grouped = surface_df.groupby(["exchange", "product_id"], sort=False)
+        else:
+            grouped = []
+
+        for (exchange, product_id), df in grouped:
+            base, quote = product_id.split("-", 1)
+            coverage = float(status_by_key[(exchange, product_id)]["coverage_ratio"])
+            df = (
+                df.drop_duplicates(subset=["timestamp"], keep="last")
+                .sort_values("timestamp")
+                .set_index("timestamp")
+            )
             self.nodes.add(base)
             self.nodes.add(quote)
-            self.edges[(base, quote)] = df
-            self.edges[(quote, base)] = df
-            self.edge_state[(base, quote)] = EdgeState()
-            self.edge_state[(quote, base)] = EdgeState()
+            self.edges[(exchange, base, quote)] = df
+            self.edges[(exchange, quote, base)] = df
+            self.edge_state[(exchange, base, quote)] = EdgeState()
+            self.edge_state[(exchange, quote, base)] = EdgeState()
             self.node_state.setdefault(base, NodeState())
             self.node_state.setdefault(quote, NodeState())
+            subscription_key = f"{exchange}:{product_id}"
+            self.pair_coverage[subscription_key] = coverage
+            self.pair_exchange[subscription_key] = exchange
+            valid_pairs.append(f"{exchange}:{product_id}")
+
+        self.all_pairs = valid_pairs
+        self.bag_subscriptions = [{"exchange": self.pair_exchange[pid], "product_id": pid} for pid in valid_pairs]
         
         if "USD" in self.nodes:
             self.nodes.discard("USD")
@@ -178,17 +416,27 @@ class CoinGraph:
     def _align_timestamps(self):
         if not self.edges:
             return
-        all_indices = [set(df.index) for df in self.edges.values()]
+        all_indices = []
+        seen_frames = set()
+        for df in self.edges.values():
+            frame_id = id(df)
+            if frame_id in seen_frames:
+                continue
+            seen_frames.add(frame_id)
+            all_indices.append(set(df.index))
         if not all_indices:
             return
         common = all_indices[0]
         for idx in all_indices[1:]:
-            common = common.union(idx)
+            common = common.intersection(idx)
         self.common_timestamps = sorted(list(common))
-        print(f"Aligned {len(self.common_timestamps)} bars across {len(self.nodes)} nodes")
+        print(
+            f"Aligned {len(self.common_timestamps)} common bars across "
+            f"{len(all_indices)} canonical pairs and {len(self.nodes)} nodes"
+        )
 
-    def update(self, bar_idx: int) -> Tuple[Dict[Tuple[str, str], float], Dict[Tuple[str, str], float], 
-                                            Dict[Tuple[str, str], bool], Dict[Tuple[str, str], bool]]:
+    def update(self, bar_idx: int) -> Tuple[Dict[Tuple[str, str, str], float], Dict[Tuple[str, str, str], float], 
+                                            Dict[Tuple[str, str, str], bool], Dict[Tuple[str, str, str], bool]]:
         """Compute velocity and PTT/STOP band crossings.
         
         Returns: (edge_accels, edge_velocities, hit_ptt, hit_stop)
@@ -197,16 +445,18 @@ class CoinGraph:
             return {}, {}, {}, {}
 
         ts = self.common_timestamps[bar_idx]
-        edge_accels = {}
-        edge_velocities = {}
-        hit_ptt = {}
-        hit_stop = {}
+        edge_accels: Dict[Tuple[str, str, str], float] = {}
+        edge_velocities: Dict[Tuple[str, str, str], float] = {}
+        hit_ptt: Dict[Tuple[str, str, str], bool] = {}
+        hit_stop: Dict[Tuple[str, str, str], bool] = {}
 
-        for (base, quote), df in self.edges.items():
+        for edge, df in self.edges.items():
             if ts not in df.index:
                 continue
 
             row = df.loc[ts]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
             close = row.get('close', 0)
             open_price = row.get('open', close)
 
@@ -214,36 +464,36 @@ class CoinGraph:
             if open_price > 0:
                 velocity = np.log(close / open_price)
 
-            prev_velocity = self.edge_state[(base, quote)].velocity
+            prev_velocity = self.edge_state[edge].velocity
             accel = velocity - prev_velocity
             
-            self.edge_state[(base, quote)].velocity = velocity
-            edge_accels[(base, quote)] = accel
-            edge_velocities[(base, quote)] = velocity
+            self.edge_state[edge].velocity = velocity
+            edge_accels[edge] = accel
+            edge_velocities[edge] = velocity
             
             # Track volatility for band computation
-            self._volatility[(base, quote)].append(abs(velocity))
-            if len(self._volatility[(base, quote)]) > self._vol_window:
-                self._volatility[(base, quote)].pop(0)
+            self._volatility[edge].append(abs(velocity))
+            if len(self._volatility[edge]) > self._vol_window:
+                self._volatility[edge].pop(0)
             
             # Compute bands: fee + volatility noise floor
-            vol = np.mean(self._volatility[(base, quote)]) if self._volatility[(base, quote)] else 0.0
-            self.edge_state[(base, quote)].ptt = self.fee_rate + vol
-            self.edge_state[(base, quote)].stop = -(self.fee_rate + vol)
+            vol = np.mean(self._volatility[edge]) if self._volatility[edge] else 0.0
+            self.edge_state[edge].ptt = self.fee_rate + vol
+            self.edge_state[edge].stop = -(self.fee_rate + vol)
             
             # Check band crossings
-            hit_ptt[(base, quote)] = velocity > self.edge_state[(base, quote)].ptt
-            hit_stop[(base, quote)] = velocity < self.edge_state[(base, quote)].stop
-            self.edge_state[(base, quote)].hit_ptt = hit_ptt[(base, quote)]
-            self.edge_state[(base, quote)].hit_stop = hit_stop[(base, quote)]
+            hit_ptt[edge] = velocity > self.edge_state[edge].ptt
+            hit_stop[edge] = velocity < self.edge_state[edge].stop
+            self.edge_state[edge].hit_ptt = hit_ptt[edge]
+            self.edge_state[edge].hit_stop = hit_stop[edge]
 
         self._compute_heights(edge_accels)
         return edge_accels, edge_velocities, hit_ptt, hit_stop
 
-    def _compute_heights(self, edge_accels: Dict[Tuple[str, str], float]):
+    def _compute_heights(self, edge_accels: Dict[Tuple[str, str, str], float]):
         """Node height = mean outgoing accel."""
         outflow = defaultdict(list)
-        for (base, quote), accel in edge_accels.items():
+        for (_, base, _), accel in edge_accels.items():
             outflow[base].append(accel)
         
         for node in self.node_state:
