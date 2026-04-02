@@ -1710,6 +1710,219 @@ class CandleCache:
             df[column] = pd.to_datetime(df[column], errors="coerce")
         return df
 
+    def repair_bag_drawthrough(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+        *,
+        max_passes: int = 6,
+        log_prefix: str = "[Bag repair]",
+        label: str = "drawthrough",
+    ) -> Dict[str, object]:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            return {
+                "status": "empty",
+                "passes": 0,
+                "remaining_fragments": 0,
+                "remaining_missing_bars": 0,
+            }
+
+        window_start = _floor_time_to_granularity(start, granularity)
+        window_end = _floor_time_to_granularity(end, granularity)
+        if window_start >= window_end:
+            return {
+                "status": "invalid_window",
+                "passes": 0,
+                "remaining_fragments": 0,
+                "remaining_missing_bars": 0,
+            }
+
+        def fragment_signature(df: pd.DataFrame) -> Tuple[Tuple[str, str, int, int, int], ...]:
+            if df.empty:
+                return ()
+            ordered = df.sort_values(
+                ["fragment_start", "fragment_end", "exchange", "product_id"]
+            )
+            return tuple(
+                (
+                    str(row.exchange),
+                    str(row.product_id),
+                    pd.Timestamp(row.fragment_start).value,
+                    pd.Timestamp(row.fragment_end).value,
+                    int(row.missing_count),
+                )
+                for row in ordered.itertuples(index=False)
+            )
+
+        previous_signature: Tuple[Tuple[str, str, int, int, int], ...] = ()
+        for pass_idx in range(1, max(max_passes, 1) + 1):
+            tail_view = self.materialize_bag_tail_coverage_view(
+                deduped,
+                window_start,
+                window_end,
+                granularity=granularity,
+            )
+            tail_df = self.read_bag_tail_coverage(tail_view)
+            fragments_view = self.materialize_bag_tail_delta_fragments_view(
+                deduped,
+                window_start,
+                window_end,
+                granularity=granularity,
+                tail_view_name=tail_view,
+            )
+            fragments_df = self.read_bag_missing_fragments(fragments_view)
+            if fragments_df.empty:
+                status = "perfect" if pass_idx == 1 else "perfected"
+                print(
+                    f"{log_prefix} {label} {status} "
+                    f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+                )
+                return {
+                    "status": status,
+                    "passes": pass_idx - 1 if pass_idx > 1 else 0,
+                    "remaining_fragments": 0,
+                    "remaining_missing_bars": 0,
+                }
+
+            signature = fragment_signature(fragments_df)
+            missing_bars = int(fragments_df["missing_count"].sum())
+            groups_view = self.materialize_bag_fragment_groups_view(
+                deduped,
+                window_start,
+                window_end,
+                granularity=granularity,
+                fragments_view_name=fragments_view,
+            )
+            groups_df = self.read_bag_fragment_groups(groups_view)
+            group_count = len(groups_df)
+            straggler_groups = int((groups_df["straggler_pairs"] > 0).sum()) if not groups_df.empty else 0
+            min_tail = int(tail_df["contiguous_tail_bars"].min()) if not tail_df.empty else 0
+            max_tail = int(tail_df["contiguous_tail_bars"].max()) if not tail_df.empty else 0
+            print(
+                f"{log_prefix} {label} "
+                f"pass={pass_idx}/{max(max_passes, 1)} "
+                f"fragments={len(fragments_df)} "
+                f"missing_bars={missing_bars} "
+                f"groups={group_count} "
+                f"stragglers={straggler_groups} "
+                f"tail_bars={min_tail}..{max_tail} "
+                f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+            )
+
+            if signature == previous_signature:
+                print(
+                    f"{log_prefix} {label} stalled "
+                    f"remaining_fragments={len(fragments_df)} "
+                    f"remaining_missing_bars={missing_bars}"
+                )
+                return {
+                    "status": "stalled",
+                    "passes": pass_idx,
+                    "remaining_fragments": len(fragments_df),
+                    "remaining_missing_bars": missing_bars,
+                }
+            previous_signature = signature
+
+            fetched_any = False
+            for row in groups_df.itertuples(index=False):
+                fetch_start_dt = pd.Timestamp(row.group_start).to_pydatetime()
+                fetch_end_dt = pd.Timestamp(row.group_end).to_pydatetime()
+                group_exchange = str(row.exchange)
+                if fetch_start_dt >= fetch_end_dt:
+                    continue
+
+                allowed_keys = {
+                    (str(sub["exchange"]), str(sub["product_id"]))
+                    for sub in deduped
+                    if str(sub["exchange"]) == group_exchange
+                }
+                group_fragments = fragments_df[
+                    (fragments_df["exchange"].astype(str) == group_exchange)
+                    & (pd.to_datetime(fragments_df["fragment_start"], errors="coerce") < pd.Timestamp(fetch_end_dt))
+                    & (pd.to_datetime(fragments_df["fragment_end"], errors="coerce") > pd.Timestamp(fetch_start_dt))
+                ]
+                exact_plans = [
+                    (
+                        str(row_fragment.product_id),
+                        pd.Timestamp(row_fragment.fragment_start).to_pydatetime(),
+                        pd.Timestamp(row_fragment.fragment_end).to_pydatetime(),
+                    )
+                    for row_fragment in group_fragments.sort_values(
+                        ["fragment_start", "fragment_end", "exchange", "product_id"]
+                    ).itertuples(index=False)
+                    if (str(row_fragment.exchange), str(row_fragment.product_id)) in allowed_keys
+                    and pd.Timestamp(row_fragment.fragment_start).to_pydatetime()
+                    < pd.Timestamp(row_fragment.fragment_end).to_pydatetime()
+                ]
+                if not exact_plans:
+                    continue
+
+                fetched_any = True
+                fetch_pairs = sorted({pid for pid, _, _ in exact_plans})
+                print(
+                    f"{log_prefix} {label} fetch "
+                    f"pairs={len(fetch_pairs)} "
+                    f"fragments={len(exact_plans)} "
+                    f"stragglers={int(row.straggler_pairs)} "
+                    f"window={_utc_isoformat(fetch_start_dt)} -> {_utc_isoformat(fetch_end_dt)}"
+                )
+                self.backfill_http_exact(
+                    exact_plans,
+                    granularity,
+                    exchange=group_exchange,
+                    protocol_label=f"HTTP {label}",
+                )
+
+            if not fetched_any:
+                print(
+                    f"{log_prefix} {label} no-fetch "
+                    f"remaining_fragments={len(fragments_df)} "
+                    f"remaining_missing_bars={missing_bars}"
+                )
+                return {
+                    "status": "no_fetch",
+                    "passes": pass_idx,
+                    "remaining_fragments": len(fragments_df),
+                    "remaining_missing_bars": missing_bars,
+                }
+
+        final_view = self.materialize_bag_tail_delta_fragments_view(
+            deduped,
+            window_start,
+            window_end,
+            granularity=granularity,
+        )
+        final_fragments_df = self.read_bag_missing_fragments(final_view)
+        remaining_fragments = len(final_fragments_df)
+        remaining_missing_bars = int(final_fragments_df["missing_count"].sum()) if not final_fragments_df.empty else 0
+        if final_fragments_df.empty:
+            print(
+                f"{log_prefix} {label} perfected "
+                f"passes={max(max_passes, 1)} "
+                f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+            )
+            return {
+                "status": "perfected",
+                "passes": max(max_passes, 1),
+                "remaining_fragments": 0,
+                "remaining_missing_bars": 0,
+            }
+        print(
+            f"{log_prefix} {label} incomplete "
+            f"after_passes={max(max_passes, 1)} "
+            f"remaining_fragments={remaining_fragments} "
+            f"remaining_missing_bars={remaining_missing_bars}"
+        )
+        return {
+            "status": "incomplete",
+            "passes": max(max_passes, 1),
+            "remaining_fragments": remaining_fragments,
+            "remaining_missing_bars": remaining_missing_bars,
+        }
+
     def materialize_bag_missing_fragments_view(
         self,
         subscriptions: List[Dict[str, str]],
@@ -2458,25 +2671,16 @@ class CandleCache:
             raise NotImplementedError(f"HTTP repair is only implemented for coinbase, not {exchange}")
         gran_sec = int(granularity)
         repair_end = _floor_time_to_granularity(end or _utc_now_naive(), granularity)
-        floor = repair_end - timedelta(seconds=gran_sec * max(overlap_candles, 1))
-
-        for pid in pairs:
-            latest = self.latest_timestamp(pid, granularity, exchange=exchange)
-            start = floor if latest is None else min(
-                latest - timedelta(seconds=gran_sec * max(overlap_candles, 1)),
-                floor,
-            )
-            if start >= repair_end:
-                continue
-            self._fetch_and_save(
-                pid,
-                exchange,
-                start,
-                repair_end,
-                granularity,
-                force=True,
-                protocol_label="HTTP repair",
-            )
+        repair_start = repair_end - timedelta(seconds=gran_sec * max(overlap_candles, 1))
+        self.repair_bag_drawthrough(
+            [{"exchange": exchange, "product_id": pid} for pid in pairs],
+            repair_start,
+            repair_end,
+            granularity=granularity,
+            max_passes=2,
+            log_prefix="[HTTP repair]",
+            label="tail",
+        )
 
     def ws_snapshot(
         self,

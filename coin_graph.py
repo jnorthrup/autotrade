@@ -366,20 +366,20 @@ class CoinGraph:
                     self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
                 elif drawthrough_fetch:
                     print(
-                        f"[CoinGraph] {bag_exchange}: draw-through fetch: seeding snapshot and backfilling "
-                        f"{len(missing_pairs)} missing pairs in background"
+                        f"[CoinGraph] {bag_exchange}: draw-through fetch: seeding snapshot and repairing "
+                        f"{len(missing_pairs)} missing pairs by span"
                     )
                     try:
                         self.cache.ws_snapshot(missing_pairs, granularity, exchange=bag_exchange)
                     except Exception as e:
                         print(f"[CoinGraph] WS snapshot failed: {e}")
-                    self.cache.prefetch_all_async(
-                        missing_pairs,
+                    self.cache.repair_bag_drawthrough(
+                        [{"exchange": bag_exchange, "product_id": pid} for pid in missing_pairs],
                         start,
                         end,
-                        granularity,
-                        name=f"drawthrough-{bag_exchange}-{granularity}",
-                        exchange=bag_exchange,
+                        granularity=granularity,
+                        log_prefix="[CoinGraph]",
+                        label=f"{bag_exchange} drawthrough",
                     )
                 else:
                     try:
