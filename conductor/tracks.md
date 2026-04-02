@@ -1,5 +1,59 @@
 # Conductor Tracks
 
+## Track 8: Exchange-qualified bag subscriptions + canonical candle store
+
+**Status:** OPEN
+**Priority:** CRITICAL
+**Owner:** conductor
+
+### Course Correction
+
+Repo truth drifted away from the current product contract. The active contract is now:
+
+- `bag.json` is a subscription surface, not a loose pair list
+- each bag entry must identify both `exchange` and `pair`
+- draw-through fulfills the bag into the canonical candle store
+- the canonical store is one `candles` table keyed by exchange + market + time
+- `graph_showdown.py` is the active training owner; wrapper trainers are subordinate or removable
+
+### Supersedes stale assumptions
+
+The following older assumptions are no longer truthful as written:
+
+- Track 4: pair-only stochastic bag sampling
+- Track 5: fixed bag fine-tune as a co-equal training surface
+- Track 6: service split that assumes multiple training policy owners
+- Track 7: two-track orchestration that treats Coinbase/Binance as separate training brains
+
+Those tracks are not deleted, but they are subordinate to this storage/subscription correction.
+
+### Deliverables
+
+1. Replace pair-only bag parsing with exchange-qualified subscription parsing.
+2. Recreate `candles` as the canonical table with exchange in the primary key.
+3. Route Coinbase and Binance draw-through into that canonical table directly.
+4. Make graph assembly and volatility discovery query the canonical store truthfully.
+5. Qualify graph edges/nodes so same pair on different exchanges cannot alias.
+6. Make `graph_showdown.py` the owning training surface for stochastic/autoresearch/autotrain policy.
+7. Reduce `finetune.py` and `training_worker.py` to wrappers or remove their duplicate policy logic.
+8. Update tests to match exchange-qualified bag and candle storage reality.
+9. Verify end-to-end bootstrapping from an empty DuckDB after table recreation.
+
+### Current bounded slice
+
+Implement the storage/subscription foundation:
+
+- add exchange-qualified bag parsing utilities
+- recreate candle storage helpers around `candles(exchange, product_id, timestamp, ...)`
+- update `coin_graph.py` and `graph_showdown.py` to consume bag subscriptions instead of bare pairs
+
+### Acceptance
+
+- no active codepath assumes `product_id` alone identifies a market
+- no active bag loader accepts a bare string without attaching an exchange
+- the canonical `candles` table is the only candle storage surface
+- `graph_showdown.py` can identify the active exchange from bag subscriptions instead of a stovepipe loader choice
+
 ## Track 0: Fix DuckDB connection configuration conflict
 
 **Status:** CLOSED

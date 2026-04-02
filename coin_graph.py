@@ -124,6 +124,8 @@ class CoinGraph:
         self.bag_subscriptions: List[Dict[str, str]] = []
         self.edges: Dict[Tuple[str, str, str], pd.DataFrame] = {}
         self.edge_state: Dict[Tuple[str, str, str], EdgeState] = {}
+        self.edge_product_id: Dict[Tuple[str, str, str], str] = {}
+        self.edge_is_inverted: Dict[Tuple[str, str, str], bool] = {}
         self.node_state: Dict[str, NodeState] = {}
         self.common_timestamps: List[pd.Timestamp] = []
         self.pair_coverage: Dict[str, float] = {}
@@ -134,6 +136,65 @@ class CoinGraph:
         self.bag_thresholds_view_name: Optional[str] = None
         self._volatility: Dict[Tuple[str, str, str], List[float]] = defaultdict(list)
         self._vol_window = 20
+
+    def add_product_frame(
+        self,
+        exchange: str,
+        product_id: str,
+        df: pd.DataFrame,
+        *,
+        coverage: Optional[float] = None,
+    ) -> None:
+        parts = product_id.split("-", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid product_id for edge registration: {product_id!r}")
+
+        base, quote = parts
+        self.nodes.add(base)
+        self.nodes.add(quote)
+        self.node_state.setdefault(base, NodeState())
+        self.node_state.setdefault(quote, NodeState())
+
+        direct_edge = (exchange, base, quote)
+        reverse_edge = (exchange, quote, base)
+        self.edges[direct_edge] = df
+        self.edges[reverse_edge] = df
+        self.edge_state[direct_edge] = EdgeState()
+        self.edge_state[reverse_edge] = EdgeState()
+        self.edge_product_id[direct_edge] = product_id
+        self.edge_product_id[reverse_edge] = product_id
+        self.edge_is_inverted[direct_edge] = False
+        self.edge_is_inverted[reverse_edge] = True
+
+        if coverage is not None:
+            subscription_key = f"{exchange}:{product_id}"
+            self.pair_coverage[subscription_key] = coverage
+            self.pair_exchange[subscription_key] = exchange
+
+    def edge_price_components(self, edge: Tuple[str, str, str], row) -> Dict[str, float]:
+        close = float(row.get("close", 0.0) or 0.0)
+        open_price = float(row.get("open", close) or close or 0.0)
+        high = float(row.get("high", close) or close or 0.0)
+        low = float(row.get("low", close) or close or 0.0)
+
+        if not self.edge_is_inverted.get(edge, False):
+            return {
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+            }
+
+        inv_open = 1.0 / open_price if open_price > 0 else 0.0
+        inv_close = 1.0 / close if close > 0 else 0.0
+        inv_high = 1.0 / low if low > 0 else 0.0
+        inv_low = 1.0 / high if high > 0 else 0.0
+        return {
+            "open": inv_open,
+            "high": inv_high,
+            "low": inv_low,
+            "close": inv_close,
+        }
 
     def load(self, db_path: Optional[str] = None, granularity: str = None,
              min_partners: int = 5, max_partners: Optional[int] = None,
@@ -383,24 +444,13 @@ class CoinGraph:
             grouped = []
 
         for (exchange, product_id), df in grouped:
-            base, quote = product_id.split("-", 1)
             coverage = float(status_by_key[(exchange, product_id)]["coverage_ratio"])
             df = (
                 df.drop_duplicates(subset=["timestamp"], keep="last")
                 .sort_values("timestamp")
                 .set_index("timestamp")
             )
-            self.nodes.add(base)
-            self.nodes.add(quote)
-            self.edges[(exchange, base, quote)] = df
-            self.edges[(exchange, quote, base)] = df
-            self.edge_state[(exchange, base, quote)] = EdgeState()
-            self.edge_state[(exchange, quote, base)] = EdgeState()
-            self.node_state.setdefault(base, NodeState())
-            self.node_state.setdefault(quote, NodeState())
-            subscription_key = f"{exchange}:{product_id}"
-            self.pair_coverage[subscription_key] = coverage
-            self.pair_exchange[subscription_key] = exchange
+            self.add_product_frame(exchange, product_id, df, coverage=coverage)
             valid_pairs.append(f"{exchange}:{product_id}")
 
         self.all_pairs = valid_pairs
@@ -457,8 +507,9 @@ class CoinGraph:
             row = df.loc[ts]
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[0]
-            close = row.get('close', 0)
-            open_price = row.get('open', close)
+            prices = self.edge_price_components(edge, row)
+            close = prices["close"]
+            open_price = prices["open"]
 
             velocity = 0.0
             if open_price > 0:

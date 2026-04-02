@@ -36,8 +36,36 @@ from hrm_model import HierarchicalReasoningModel
 from coin_graph import CoinGraph, EdgeState, NodeState
 from config import Config
 from candle_cache import CandleCache
+from graph_showdown import plan_walk_forward_split, run_walk_forward_validation
 
 import duckdb
+
+from pool_client import PoolClient, pool_is_running as _pool_is_running
+
+# ---------------------------------------------------------------------------
+# Pool-routing helpers
+# ---------------------------------------------------------------------------
+
+_pool_client = None
+
+
+def _use_pool() -> bool:
+    """Return True if the DuckDB pool server is available."""
+    global _pool_client
+    if _pool_client is None:
+        try:
+            if _pool_is_running():
+                _pool_client = PoolClient()
+            else:
+                _pool_client = False  # sentinel: checked, not available
+        except Exception:
+            _pool_client = False
+    return _pool_client is not False
+
+
+def _pool() -> PoolClient:
+    """Return the shared PoolClient instance (only valid when _use_pool())."""
+    return _pool_client
 
 
 # Configuration from environment
@@ -49,6 +77,7 @@ WORKER_ID = os.getenv("WORKER_ID", "training-worker")
 SAVE_EVERY = int(os.getenv("SAVE_EVERY", "1000"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "60"))
+MODEL_DEVICE = os.getenv("MODEL_DEVICE", "auto")
 
 # Scale bag size with model dimensions
 BAG_SIZE_SCALE = {
@@ -61,6 +90,79 @@ BAG_SIZE_SCALE = {
 # Square cube progression (powers of 4)
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
 GROWTH_CYCLE = ['h', 'H', 'L']  # hidden_size -> H_layers -> L_layers
+PLATEAU_WINDOW = 100
+PLATEAU_THRESHOLD = 1e-5
+PLATEAU_PATIENCE = 3
+
+
+def _training_status(avg_loss: Optional[float], n_updates: int) -> str:
+    if avg_loss is None or n_updates <= 0:
+        return "no scored updates; warmup or maturity never completed"
+    return f"avg_loss={avg_loss:.6f}, n_updates={n_updates}"
+
+
+def _next_square_cube_size(size: int) -> Optional[int]:
+    if size not in SQUARE_CUBE_SIZES:
+        raise ValueError(f"Invalid square-cube size {size}; expected one of {SQUARE_CUBE_SIZES}")
+    idx = SQUARE_CUBE_SIZES.index(size)
+    if idx + 1 >= len(SQUARE_CUBE_SIZES):
+        return None
+    return SQUARE_CUBE_SIZES[idx + 1]
+
+
+def _validate_square_cube_state(hidden_size: int, H_layers: int, L_layers: int):
+    sizes = (hidden_size, H_layers, L_layers)
+    invalid = [size for size in sizes if size not in SQUARE_CUBE_SIZES]
+    if invalid:
+        raise ValueError(f"Square-cube state must use only {SQUARE_CUBE_SIZES}, got {sizes}")
+    if len(set(sizes)) > 2:
+        raise ValueError(f"Square-cube state may use at most 2 distinct powers of 4, got {sizes}")
+
+
+def _apply_growth_step(
+    model: HierarchicalReasoningModel,
+    growth_dim: str,
+    hidden_size: int,
+    H_layers: int,
+    L_layers: int,
+) -> Tuple[int, int, int, bool]:
+    _validate_square_cube_state(hidden_size, H_layers, L_layers)
+
+    if growth_dim == 'h':
+        if _next_square_cube_size(hidden_size) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('h')
+        hidden_size = model.h_dim
+    elif growth_dim == 'H':
+        if _next_square_cube_size(H_layers) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('H')
+        H_layers = model.H_layers
+    elif growth_dim == 'L':
+        if _next_square_cube_size(L_layers) is None:
+            return hidden_size, H_layers, L_layers, False
+        model.grow('L')
+        L_layers = model.L_layers
+    else:
+        raise ValueError(f"Unknown growth dimension: {growth_dim}")
+
+    _validate_square_cube_state(hidden_size, H_layers, L_layers)
+    return hidden_size, H_layers, L_layers, True
+
+
+def _is_converged(losses: List[float]) -> bool:
+    n = len(losses)
+    if n < PLATEAU_WINDOW * PLATEAU_PATIENCE:
+        return False
+    for i in range(PLATEAU_PATIENCE):
+        chunk = losses[-PLATEAU_WINDOW * (PLATEAU_PATIENCE - i):]
+        if len(chunk) < PLATEAU_WINDOW:
+            continue
+        recent = np.mean(chunk[-PLATEAU_WINDOW:])
+        older = np.mean(chunk[:PLATEAU_WINDOW])
+        if abs(recent - older) > PLATEAU_THRESHOLD:
+            return False
+    return True
 
 
 class TrainingWorker:
@@ -74,6 +176,7 @@ class TrainingWorker:
         save_every: int = SAVE_EVERY,
         poll_interval: int = POLL_INTERVAL,
         lookback_days: int = LOOKBACK_DAYS,
+        device: Optional[str] = None,
     ):
         self.mode = mode
         self.worker_id = worker_id
@@ -81,6 +184,7 @@ class TrainingWorker:
         self.save_every = save_every
         self.poll_interval = poll_interval
         self.lookback_days = lookback_days
+        self.device = device or ("cpu" if mode == "finetune" else MODEL_DEVICE)
         
         # Ensure directories exist
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +232,9 @@ class TrainingWorker:
         self.logger.addHandler(handler)
         self.logger.addHandler(console)
         
-        self.logger.info(f"TrainingWorker initialized: mode={self.mode}, id={self.worker_id}")
+        self.logger.info(
+            f"TrainingWorker initialized: mode={self.mode}, id={self.worker_id}, device={self.device}"
+        )
     
     def _handle_signal(self, signum, frame):
         """Graceful shutdown on signal."""
@@ -155,10 +261,15 @@ class TrainingWorker:
     def _list_available_pairs(self) -> List[str]:
         """List all pairs available in DB."""
         try:
-            with duckdb.connect(str(DB_PATH)) as conn:
-                rows = conn.execute("""
-                    SELECT DISTINCT product_id FROM candles
-                """).fetchall()
+            if _use_pool():
+                rows = _pool().execute(
+                    "SELECT DISTINCT product_id FROM candles"
+                )
+            else:
+                with duckdb.connect(str(DB_PATH)) as conn:
+                    rows = conn.execute("""
+                        SELECT DISTINCT product_id FROM candles
+                    """).fetchall()
             pairs = [r[0] for r in rows]
             self.logger.info(f"Found {len(pairs)} pairs in database")
             return pairs
@@ -183,13 +294,22 @@ class TrainingWorker:
                     continue
             
             try:
-                with duckdb.connect(str(db_path)) as conn:
-                    rows = conn.execute(f"""
-                        SELECT close FROM candles
+                if _use_pool():
+                    rows = _pool().execute(
+                        f"""SELECT close FROM candles
                         WHERE product_id = ?
                         ORDER BY timestamp DESC
-                        LIMIT {window + 1}
-                    """, [pair]).fetchall()
+                        LIMIT {window + 1}""",
+                        [pair],
+                    )
+                else:
+                    with duckdb.connect(str(db_path)) as conn:
+                        rows = conn.execute(f"""
+                            SELECT close FROM candles
+                            WHERE product_id = ?
+                            ORDER BY timestamp DESC
+                            LIMIT {window + 1}
+                        """, [pair]).fetchall()
                 
                 if len(rows) < window:
                     continue
@@ -226,7 +346,10 @@ class TrainingWorker:
         end_bar: int,
     ) -> CoinGraph:
         """Create subgraph with only selected pairs."""
-        trial = CoinGraph(fee_rate=full_graph.fee_rate)
+        trial = CoinGraph(
+            fee_rate=full_graph.fee_rate,
+            min_pair_coverage=getattr(full_graph, "min_pair_coverage", 0.9),
+        )
         trial.all_pairs = selected_pairs
         
         pair_to_edges = {}
@@ -248,7 +371,11 @@ class TrainingWorker:
                     trial.node_state.setdefault(base, NodeState())
                     trial.node_state.setdefault(quote, NodeState())
         
-        trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
+        if trial.edges and all(not callable(getattr(df, "index", None)) for df in trial.edges.values()):
+            trial._align_timestamps()
+            trial.common_timestamps = trial.common_timestamps[start_bar:end_bar]
+        else:
+            trial.common_timestamps = full_graph.common_timestamps[start_bar:end_bar]
         return trial
     
     def _build_model(
@@ -273,16 +400,19 @@ class TrainingWorker:
             L_layers=L_layers,
             H_cycles=2,
             L_cycles=2,
+            device=self.device,
         )
     
     def _run_training_step(
         self,
         graph: CoinGraph,
         model: HierarchicalReasoningModel,
-    ) -> Tuple[float, int]:
-        """Run one training iteration. Returns (avg_loss, n_updates)."""
+    ) -> Tuple[Optional[float], int, List[float]]:
+        """Run one training iteration. Returns (avg_loss_or_none, n_updates, loss_history)."""
         total_loss = 0.0
         n_updates = 0
+        loss_history: List[float] = []
+        model.set_profile_enabled(False)
         
         for bar_idx in range(len(graph.common_timestamps)):
             if self.stopped:
@@ -292,18 +422,21 @@ class TrainingWorker:
             
             if not edge_accels:
                 continue
+
+            model.update_prices(graph, bar_idx)
             
-            if bar_idx >= model.prediction_depth:
+            if model.ready_for_prediction(bar_idx):
                 model.predict(graph, bar_idx)
             
-            if bar_idx >= model.prediction_depth * 2:
+            if model.ready_for_update(bar_idx, edge_accels):
                 loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
                 if loss is not None:
                     total_loss += loss
                     n_updates += 1
+                    loss_history.append(loss)
         
-        avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-        return avg_loss, n_updates
+        avg_loss = (total_loss / n_updates) if n_updates > 0 else None
+        return avg_loss, n_updates, loss_history
     
     def _run_pretrain_cycle(self):
         """One pretrain cycle: sample bag, train, maybe grow."""
@@ -332,10 +465,15 @@ class TrainingWorker:
         )
         
         # Sample time window
-        with duckdb.connect(str(DB_PATH)) as conn:
-            total_bars = conn.execute("""
-                SELECT COUNT(DISTINCT timestamp) FROM candles
-            """).fetchone()[0]
+        if _use_pool():
+            total_bars = _pool().execute(
+                "SELECT COUNT(DISTINCT timestamp) FROM candles"
+            )[0][0]
+        else:
+            with duckdb.connect(str(DB_PATH)) as conn:
+                total_bars = conn.execute("""
+                    SELECT COUNT(DISTINCT timestamp) FROM candles
+                """).fetchone()[0]
         
         window_bars = min(10000, total_bars)
         max_start = max(0, total_bars - window_bars)
@@ -384,17 +522,85 @@ class TrainingWorker:
             )
         
         self.model.register_edges(list(trial_graph.edges.keys()))
+
+        split = plan_walk_forward_split(len(trial_graph.common_timestamps), self.model)
+        if split is None:
+            self.logger.warning("Not enough bars for walk-forward pretrain validation")
+            return
+        train_start_bar, train_end_bar, validation_end_bar = split
         
         # Train
-        avg_loss, n_updates = self._run_training_step(trial_graph, self.model)
+        avg_loss, n_updates, loss_history = self._run_training_step(
+            self._make_subset_graph(
+                trial_graph,
+                selected_pairs,
+                train_start_bar,
+                train_end_bar,
+            ),
+            self.model,
+        )
+        validation_loss, validation_updates = run_walk_forward_validation(
+            trial_graph,
+            self.model,
+            validation_start_bar=train_end_bar,
+            end_bar=validation_end_bar,
+            warmup_start_bar=train_start_bar,
+        )
         
-        self.logger.info(f"Phase {self.phase}: loss={avg_loss:.6f}, updates={n_updates}")
+        self.logger.info(f"Phase {self.phase}: {_training_status(avg_loss, n_updates)}")
+        if validation_loss is not None:
+            self.logger.info(
+                "Phase %s walk-forward: avg_loss=%.6f, updates=%s",
+                self.phase,
+                validation_loss,
+                validation_updates,
+            )
+        else:
+            self.logger.info("Phase %s walk-forward: no scored updates", self.phase)
+
+        growth_dim = GROWTH_CYCLE[self.growth_idx]
+        if _is_converged(loss_history):
+            old_h = self.hidden_size
+            old_H = self.H_layers
+            old_L = self.L_layers
+            self.hidden_size, self.H_layers, self.L_layers, did_grow = _apply_growth_step(
+                self.model,
+                growth_dim,
+                self.hidden_size,
+                self.H_layers,
+                self.L_layers,
+            )
+            if did_grow:
+                self.growth_idx = (self.growth_idx + 1) % len(GROWTH_CYCLE)
+                self.logger.info(
+                    "Converged -> growth %s [h=%s, H=%s, L=%s] -> [h=%s, H=%s, L=%s]",
+                    growth_dim,
+                    old_h,
+                    old_H,
+                    old_L,
+                    self.hidden_size,
+                    self.H_layers,
+                    self.L_layers,
+                )
+                save_path = self._get_checkpoint_path()
+                self.model.save(str(save_path), checkpoint_type=f"pretrain_growth_phase_{self.phase}")
+                self.logger.info(f"Saved grown checkpoint: {save_path}")
+            else:
+                self.logger.info(
+                    "Converged but %s is already at max [h=%s, H=%s, L=%s]",
+                    growth_dim,
+                    self.hidden_size,
+                    self.H_layers,
+                    self.L_layers,
+                )
         
         # Save checkpoint periodically
-        if self.phase % self.save_every == 0:
+        if self.phase % self.save_every == 0 and n_updates > 0 and validation_loss is not None:
             save_path = self._get_checkpoint_path()
             self.model.save(str(save_path), checkpoint_type=f"pretrain_phase_{self.phase}")
             self.logger.info(f"Saved checkpoint: {save_path}")
+        elif self.phase % self.save_every == 0:
+            self.logger.info("Skipped checkpoint save: no scored walk-forward validation in this cycle")
     
     def _run_finetune_cycle(self):
         """One finetune cycle: train on recent window with fixed bag."""
@@ -444,17 +650,53 @@ class TrainingWorker:
                 return
         
         self.model.register_edges(list(trial_graph.edges.keys()))
+        self.model._lr = 0.0001
+        if self.model._optimizer is not None:
+            for param_group in self.model._optimizer.param_groups:
+                param_group['lr'] = 0.0001
+
+        split = plan_walk_forward_split(len(trial_graph.common_timestamps), self.model)
+        if split is None:
+            self.logger.warning("Not enough bars for walk-forward fine-tune validation")
+            return
+        train_start_bar, train_end_bar, validation_end_bar = split
         
         # Train (no growth)
-        avg_loss, n_updates = self._run_training_step(trial_graph, self.model)
+        avg_loss, n_updates, _ = self._run_training_step(
+            self._make_subset_graph(
+                trial_graph,
+                self.fixed_bag,
+                train_start_bar,
+                train_end_bar,
+            ),
+            self.model,
+        )
+        validation_loss, validation_updates = run_walk_forward_validation(
+            trial_graph,
+            self.model,
+            validation_start_bar=train_end_bar,
+            end_bar=validation_end_bar,
+            warmup_start_bar=train_start_bar,
+        )
         
-        self.logger.info(f"Fine-tune phase {self.phase}: loss={avg_loss:.6f}, updates={n_updates}")
+        self.logger.info(f"Fine-tune phase {self.phase}: {_training_status(avg_loss, n_updates)}")
+        if validation_loss is not None:
+            self.logger.info(
+                "Fine-tune phase %s walk-forward: avg_loss=%.6f, updates=%s",
+                self.phase,
+                validation_loss,
+                validation_updates,
+            )
+        else:
+            self.logger.info("Fine-tune phase %s walk-forward: no scored updates", self.phase)
         
         # Save checkpoint
-        if self.phase % self.save_every == 0:
+        if self.phase % self.save_every == 0 and n_updates > 0 and validation_loss is not None:
             save_path = self._get_checkpoint_path()
             self.model.save(str(save_path), checkpoint_type=f"finetune_phase_{self.phase}")
             self.logger.info(f"Saved checkpoint: {save_path}")
+        elif self.phase % self.save_every == 0:
+            self.logger.info("Skipped checkpoint save: no scored walk-forward validation in this cycle")
     
     def run(self):
         """Main worker loop."""
@@ -518,6 +760,13 @@ def main():
         default=None,
         help="Seconds between cycles"
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        choices=["auto", "cpu", "mps", "cuda"],
+        help="Runtime device override"
+    )
     
     args = parser.parse_args()
     
@@ -528,6 +777,7 @@ def main():
         save_every=args.save_every or SAVE_EVERY,
         poll_interval=args.poll_interval or POLL_INTERVAL,
         lookback_days=args.lookback_days or LOOKBACK_DAYS,
+        device=args.device,
     )
     
     worker.run()

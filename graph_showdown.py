@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
 import zstandard as zstd
 
 from hrm_model import HierarchicalReasoningModel
@@ -21,7 +22,7 @@ from coin_graph import (
     DEFAULT_MIN_PAIR_COVERAGE,
 )
 from config import Config
-from candle_cache import CandleCache, _floor_time_to_granularity, _utc_now_naive
+from candle_cache import CandleCache, _floor_time_to_granularity, _utc_isoformat, _utc_now_naive
 
 import duckdb
 from pool_client import PoolClient, pool_is_running
@@ -303,6 +304,130 @@ def _group_subscriptions_by_exchange(subscriptions: List[Dict[str, str]]) -> Dic
     return grouped
 
 
+def _subscription_key(sub: Dict[str, str]) -> Tuple[str, str]:
+    return str(sub["exchange"]), str(sub["product_id"])
+
+
+def _format_product_group(product_ids: List[str]) -> str:
+    by_quote: Dict[str, List[str]] = {}
+    passthrough: List[str] = []
+
+    for product_id in sorted(set(product_ids)):
+        parts = product_id.split("-", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            passthrough.append(product_id)
+            continue
+        base, quote = parts
+        by_quote.setdefault(quote, []).append(base)
+
+    formatted: List[str] = []
+    ordered_quotes = sorted(by_quote, key=lambda quote: (-len(set(by_quote[quote])), quote))
+    for quote in ordered_quotes:
+        bases = sorted(set(by_quote[quote]))
+        if len(bases) == 1:
+            formatted.append(f"{bases[0]}-{quote}")
+        else:
+            formatted.append("{" + ",".join(bases) + "}" + f"-{quote}")
+
+    formatted.extend(passthrough)
+    return ",".join(formatted)
+
+
+def _format_subscription_keys(subscriptions: List[Dict[str, str]]) -> str:
+    grouped: Dict[str, List[str]] = {}
+    for sub in subscriptions:
+        exchange, product_id = _subscription_key(sub)
+        grouped.setdefault(exchange, []).append(product_id)
+    parts = []
+    for exchange in sorted(grouped):
+        product_ids = _format_product_group(grouped[exchange])
+        parts.append(f"{exchange}:{product_ids}")
+    return ", ".join(parts)
+
+
+def _checkpoint_source_summary(checkpoint_path: str) -> str:
+    checkpoint = Path(checkpoint_path)
+    if not checkpoint.exists():
+        return f"source=fresh path={checkpoint.resolve()} exists=False"
+    try:
+        state = torch.load(str(checkpoint), weights_only=False, map_location="cpu")
+    except Exception as exc:
+        return f"source=unreadable path={checkpoint.resolve()} exists=True error={exc}"
+    if not isinstance(state, dict):
+        return f"source=unknown path={checkpoint.resolve()} exists=True payload={type(state).__name__}"
+    cas = state.get("model_cas", "n/a")
+    checkpoint_type = state.get("checkpoint_type", "n/a")
+    timestamp = state.get("checkpoint_timestamp", "n/a")
+    h_dim = state.get("h_dim", "n/a")
+    z_dim = state.get("z_dim", "n/a")
+    H_layers = state.get("H_layers", "n/a")
+    L_layers = state.get("L_layers", "n/a")
+    return (
+        f"source=checkpoint path={checkpoint.resolve()} exists=True "
+        f"type={checkpoint_type} timestamp={timestamp} cas={cas} "
+        f"h={h_dim} z={z_dim} H={H_layers} L={L_layers}"
+    )
+
+
+def _rotary_state_summary(model: HierarchicalReasoningModel) -> str:
+    state = (model.h_dim, model.z_dim, model.H_layers, model.L_layers)
+    distinct = sorted(set(state))
+    return (
+        f"h={model.h_dim} z={model.z_dim} H={model.H_layers} L={model.L_layers} "
+        f"H_cycles={model.H_cycles} L_cycles={model.L_cycles} "
+        f"powers={distinct} num_powers={len(distinct)}"
+    )
+
+
+def _print_coinbase_run_context(
+    *,
+    stage: str,
+    bag_path: str,
+    subscriptions: List[Dict[str, str]],
+    checkpoint_path: str,
+    training_db_path: Optional[str],
+    learning_rate: float,
+    y_depth: int,
+    x_pixels: int,
+    curvature: float,
+    prediction_depth: int,
+    granularity: str,
+    lookback_days: int,
+    device: str,
+    live: bool,
+    live_train_interval: int,
+    live_http_repair_seconds: int,
+    live_http_overlap_candles: int,
+    live_idle_restart_seconds: int,
+    model: Optional[HierarchicalReasoningModel] = None,
+):
+    print(
+        f"[Coinbase run/{stage}] "
+        f"bag_path={Path(bag_path).resolve()} pairs={len(subscriptions)} "
+        f"subscriptions={_format_subscription_keys(subscriptions)}"
+    )
+    print(
+        f"[Coinbase run/{stage}] "
+        f"lr={learning_rate} y_depth={y_depth} x_pixels={x_pixels} curvature={curvature} "
+        f"prediction_depth={prediction_depth} granularity={granularity} "
+        f"lookback_days={lookback_days} device={device} live={live}"
+    )
+    print(
+        f"[Coinbase run/{stage}] "
+        f"live_train_interval={live_train_interval} "
+        f"live_http_repair_seconds={live_http_repair_seconds} "
+        f"live_http_overlap_candles={live_http_overlap_candles} "
+        f"live_idle_restart_seconds={live_idle_restart_seconds} "
+        f"training_db_path={Path(training_db_path).resolve() if training_db_path else 'None'}"
+    )
+    print(f"[Coinbase run/{stage}] {_checkpoint_source_summary(checkpoint_path)}")
+    if model is not None:
+        print(
+            f"[Coinbase run/{stage}] "
+            f"model_cas={model.model_cas_signature()} rotary={_rotary_state_summary(model)}"
+        )
+
+
 def _log_bag_coverage_summary(label: str, statuses: List[Dict[str, object]]) -> Tuple[int, int]:
     total = len(statuses)
     covered = [status for status in statuses if bool(status["covered"])]
@@ -317,6 +442,93 @@ def _log_bag_coverage_summary(label: str, statuses: List[Dict[str, object]]) -> 
     return len(covered), len(invalid)
 
 
+def _bag_surface_state(
+    cache: CandleCache,
+    subscriptions: List[Dict[str, str]],
+    start: datetime,
+    end: datetime,
+    granularity: str = "300",
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, List[Dict[str, str]], List[datetime]]:
+    drawthrough = cache.query_bag_drawthrough(
+        subscriptions,
+        start,
+        end,
+        granularity=granularity,
+    )
+    surface_df = drawthrough["surface"]
+    status_df = drawthrough["span_status"]
+    common_support_df = drawthrough["common_support"]
+    requested_keys = {_subscription_key(sub) for sub in subscriptions}
+    if status_df.empty:
+        missing = [
+            {"exchange": exchange, "product_id": product_id}
+            for exchange, product_id in sorted(requested_keys)
+        ]
+        return surface_df, status_df, common_support_df, missing, []
+
+    present_keys = {
+        (str(exchange), str(product_id))
+        for exchange, product_id, actual_count in status_df[["exchange", "product_id", "actual_count"]].itertuples(index=False, name=None)
+        if int(actual_count) > 0
+    }
+    missing = [
+        {"exchange": exchange, "product_id": product_id}
+        for exchange, product_id in sorted(requested_keys - present_keys)
+    ]
+
+    common_timestamps = [
+        pd.Timestamp(ts).to_pydatetime()
+        for ts, is_common in common_support_df[["timestamp", "is_common"]].itertuples(index=False, name=None)
+        if bool(is_common)
+    ] if not common_support_df.empty else []
+    common_timestamps.sort()
+
+    return surface_df, status_df, common_support_df, missing, common_timestamps
+
+
+def _surface_union_timestamps(surface_df: pd.DataFrame) -> List[pd.Timestamp]:
+    if surface_df.empty or "timestamp" not in surface_df.columns:
+        return []
+    return sorted(
+        {
+            pd.Timestamp(ts)
+            for ts in surface_df["timestamp"].tolist()
+            if not pd.isna(ts)
+        }
+    )
+
+
+def _finalize_selected_graph_timestamps(
+    graph: CoinGraph,
+    *,
+    surface_df: pd.DataFrame,
+    common_timestamps: List[datetime],
+) -> None:
+    graph._align_timestamps()
+    if graph.common_timestamps:
+        return
+
+    support_timestamps = sorted(pd.Timestamp(ts) for ts in common_timestamps)
+    if support_timestamps:
+        graph.common_timestamps = support_timestamps
+        print(
+            f"[SelectedGraph] no exact dataframe intersection; "
+            f"using bag-surface common-support timeline ({len(support_timestamps)} bars)"
+        )
+        return
+
+    union_timestamps = _surface_union_timestamps(surface_df)
+    if union_timestamps:
+        graph.common_timestamps = union_timestamps
+        print(
+            f"[SelectedGraph] no all-pair common bars; "
+            f"using union timeline ({len(union_timestamps)} bars)"
+        )
+        return
+
+    raise RuntimeError("Fixed Coinbase bag surface has no timestamps to replay")
+
+
 def _load_selected_pair_graph(
     selected_subscriptions: List[Dict[str, str]],
     start: datetime,
@@ -328,83 +540,30 @@ def _load_selected_pair_graph(
     cache = CandleCache(str(Config.DB_PATH))
     graph = CoinGraph(fee_rate=fee_rate, min_pair_coverage=min_pair_coverage)
     graph.cache = cache
-    requested_span = end - start
-    active_start = start
-    active_end = end
-
-    def _verify_window(window_start: datetime, window_end: datetime) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, str]]]:
-        window_statuses = cache.verify_bag_contiguous_coverage(
-            selected_subscriptions,
-            window_start,
-            window_end,
-            granularity=granularity,
-        )
-        window_invalid = [status for status in window_statuses if not bool(status["covered"])]
-        window_valid = [
-            {"exchange": str(status["exchange"]), "product_id": str(status["product_id"])}
-            for status in window_statuses
-            if bool(status["covered"])
-        ]
-        return window_statuses, window_invalid, window_valid
-
-    statuses, invalid, valid_subscriptions = _verify_window(active_start, active_end)
-    if not valid_subscriptions:
-        gran_sec = int(granularity)
-        dense_candidates = [
-            status
-            for status in statuses
-            if float(status["coverage_ratio"]) >= min_pair_coverage
-            and int(status["bad_gap_count"]) == 0
-            and status["last_timestamp"] is not None
-        ]
-        if dense_candidates:
-            shifted_end = min(
-                pd.Timestamp(status["last_timestamp"]).to_pydatetime() + timedelta(seconds=gran_sec)
-                for status in dense_candidates
-            )
-            shifted_start = shifted_end - requested_span
-            if shifted_end < active_end:
-                print(
-                    f"[SelectedGraph] shifting verified window back to "
-                    f"{shifted_start.isoformat()} -> {shifted_end.isoformat()} "
-                    f"to avoid uncovered trailing gap"
-                )
-                active_start, active_end = shifted_start, shifted_end
-                statuses, invalid, valid_subscriptions = _verify_window(active_start, active_end)
-    if invalid:
-        preview = ", ".join(
-            f"{status['exchange']}:{status['product_id']} ({float(status['coverage_ratio']):.3f})"
-            for status in invalid[:5]
-        )
-        print(
-            f"[SelectedGraph] dropping {len(invalid)}/{len(statuses)} subscriptions "
-            f"for incomplete contiguous coverage: {preview}"
-        )
-    if not valid_subscriptions:
-        raise RuntimeError(
-            f"No subscriptions passed contiguous coverage for the requested window; "
-            f"first failures: {preview if invalid else 'n/a'}"
-        )
-    if not statuses:
-        raise RuntimeError("No valid subscriptions available for bag surface materialization")
-
-    bag_state = cache.persist_bag_window_status(
+    graph.bag_id = None
+    graph.bag_window_id = None
+    graph.bag_surface_name = None
+    graph.bag_thresholds_view_name = None
+    surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
+        cache,
         selected_subscriptions,
-        statuses,
-        active_start,
-        active_end,
+        start,
+        end,
         granularity=granularity,
-        min_coverage_ratio=min_pair_coverage,
-        bag_name="selected_graph",
     )
-    graph.bag_id = bag_state["bag_id"]
-    graph.bag_window_id = bag_state["bag_window_id"]
-    graph.bag_thresholds_view_name = "bag_thresholds_v"
-    graph.bag_surface_name = cache.materialize_bag_surface_for_window(graph.bag_window_id)
-    surface_df = cache.read_bag_surface(graph.bag_surface_name)
-    status_by_key = {
-        (str(status["exchange"]), str(status["product_id"])): status
-        for status in statuses
+    if missing_subscriptions:
+        raise RuntimeError(
+            "Fixed Coinbase bag surface is missing requested subscriptions: "
+            f"{_format_subscription_keys(missing_subscriptions)}"
+        )
+    if surface_df.empty:
+        raise RuntimeError("No candle data available for the requested bag surface")
+    graph.bag_window_id = None
+
+    expected = max(1, int((end - start).total_seconds() // int(granularity)))
+    counts_by_key = {
+        (str(exchange), str(product_id)): int(count)
+        for (exchange, product_id), count in surface_df.groupby(["exchange", "product_id"]).size().items()
     }
     materialized_subscriptions: List[Dict[str, str]] = []
 
@@ -412,7 +571,6 @@ def _load_selected_pair_graph(
         parts = pid.split("-", 1)
         if len(parts) != 2:
             continue
-        base, quote = parts
         df = (
             df.drop_duplicates(subset=["timestamp"], keep="last")
             .sort_values("timestamp")
@@ -420,17 +578,8 @@ def _load_selected_pair_graph(
         )
         if df.empty:
             continue
-        coverage = float(status_by_key[(exchange, pid)]["coverage_ratio"])
-        graph.nodes.add(base)
-        graph.nodes.add(quote)
-        graph.edges[(exchange, base, quote)] = df
-        graph.edges[(exchange, quote, base)] = df
-        graph.edge_state[(exchange, base, quote)] = EdgeState()
-        graph.edge_state[(exchange, quote, base)] = EdgeState()
-        graph.node_state.setdefault(base, NodeState())
-        graph.node_state.setdefault(quote, NodeState())
-        graph.pair_coverage[f"{exchange}:{pid}"] = coverage
-        graph.pair_exchange[f"{exchange}:{pid}"] = exchange
+        coverage = min(1.0, counts_by_key.get((exchange, pid), 0) / expected)
+        graph.add_product_frame(exchange, pid, df, coverage=coverage)
         materialized_subscriptions.append({"exchange": exchange, "product_id": pid})
 
     graph.all_pairs = [f"{sub['exchange']}:{sub['product_id']}" for sub in materialized_subscriptions]
@@ -440,12 +589,18 @@ def _load_selected_pair_graph(
         graph.nodes.discard("USD")
         graph.nodes = {"USD"} | graph.nodes
 
-    graph._align_timestamps()
+    _finalize_selected_graph_timestamps(
+        graph,
+        surface_df=surface_df,
+        common_timestamps=common_timestamps,
+    )
     return graph
 
 
 def _replay_margin_bars(model: HierarchicalReasoningModel) -> int:
-    return max(model.y_depth + model.prediction_depth + 32, 256)
+    min_train_bars = max(model.y_depth + model.prediction_depth + 64, 256)
+    min_validation_bars = max(model.prediction_depth + 32, 64)
+    return max(model.y_depth + model.prediction_depth + 32, min_train_bars + min_validation_bars)
 
 
 def plan_walk_forward_split(
@@ -478,6 +633,8 @@ def _clone_graph_for_replay(graph: CoinGraph) -> CoinGraph:
     for edge, df in graph.edges.items():
         clone.edges[edge] = df
         clone.edge_state[edge] = EdgeState()
+    clone.edge_product_id = dict(getattr(graph, "edge_product_id", {}))
+    clone.edge_is_inverted = dict(getattr(graph, "edge_is_inverted", {}))
     for node in graph.node_state:
         clone.node_state[node] = NodeState()
     clone.pair_coverage = dict(getattr(graph, "pair_coverage", {}))
@@ -920,6 +1077,10 @@ def _make_trial_graph(full_graph: CoinGraph, selected_pairs: List[str],
             if edge in full_graph.edges:
                 trial.edges[edge] = full_graph.edges[edge]
                 trial.edge_state[edge] = EdgeState()
+                if edge in getattr(full_graph, "edge_product_id", {}):
+                    trial.edge_product_id[edge] = full_graph.edge_product_id[edge]
+                if edge in getattr(full_graph, "edge_is_inverted", {}):
+                    trial.edge_is_inverted[edge] = full_graph.edge_is_inverted[edge]
         trial.nodes.add(base)
         trial.nodes.add(quote)
         trial.node_state.setdefault(base, NodeState())
@@ -1272,9 +1433,44 @@ def run_coinbase_week_http_then_live(
     selected_subscriptions = _load_bag_subscriptions(bag_path)
     if not selected_subscriptions:
         raise ValueError(f"No valid subscriptions found in {bag_path}")
+    non_coinbase = [sub for sub in selected_subscriptions if sub["exchange"] != "coinbase"]
+    if non_coinbase:
+        raise ValueError(
+            "coinbase-week-http-then-live requires an all-Coinbase bag; found: "
+            f"{_format_subscription_keys(non_coinbase)}"
+        )
     selected_by_exchange = _group_subscriptions_by_exchange(selected_subscriptions)
+    _print_coinbase_run_context(
+        stage="requested",
+        bag_path=bag_path,
+        subscriptions=selected_subscriptions,
+        checkpoint_path=checkpoint_path,
+        training_db_path=training_db_path,
+        learning_rate=learning_rate,
+        y_depth=y_depth,
+        x_pixels=x_pixels,
+        curvature=curvature,
+        prediction_depth=prediction_depth,
+        granularity=granularity,
+        lookback_days=lookback_days,
+        device=device,
+        live=live,
+        live_train_interval=live_train_interval,
+        live_http_repair_seconds=live_http_repair_seconds,
+        live_http_overlap_candles=live_http_overlap_candles,
+        live_idle_restart_seconds=live_idle_restart_seconds,
+    )
 
     cache = CandleCache(str(Config.DB_PATH))
+    coinbase_validation = cache.validate_coinbase_products(
+        [sub["product_id"] for sub in selected_subscriptions if sub["exchange"] == "coinbase"]
+    )
+    bad_coinbase = list(coinbase_validation["missing"]) + list(coinbase_validation["invalid"])
+    if bad_coinbase:
+        raise RuntimeError(
+            "Coinbase bag contains products that are not live Coinbase Advanced spot products: "
+            + ", ".join(bad_coinbase)
+        )
     bootstrap = cache.bootstrap_database(granularity=granularity)
     print(
         f"[Coinbase week/live bootstrap] db={bootstrap['db_path']} "
@@ -1285,54 +1481,75 @@ def run_coinbase_week_http_then_live(
     initial_end = _floor_time_to_granularity(_utc_now_naive(), granularity)
     initial_start = initial_end - timedelta(days=lookback_days)
 
-    subscription_summary = ", ".join(
-        f"{exchange}:{len(subs)}" for exchange, subs in sorted(selected_by_exchange.items())
-    )
     print(
-        f"[Coinbase week/live] subscriptions={subscription_summary} "
+        f"[Coinbase week/live] subscriptions={_format_subscription_keys(selected_subscriptions)} "
         f"pairs={len(selected_subscriptions)} "
-        f"window={initial_start.isoformat()} -> {initial_end.isoformat()} "
+        f"window={_utc_isoformat(initial_start)} -> {_utc_isoformat(initial_end)} "
         f"granularity={granularity} device={device}"
     )
 
     for exchange, subs in sorted(selected_by_exchange.items()):
         pairs = [sub["product_id"] for sub in subs]
-        if exchange == "coinbase":
-            cache.backfill_http(pairs, initial_start, initial_end, granularity, exchange=exchange)
-            coinbase_statuses = cache.verify_bag_contiguous_coverage(
+        if exchange != "coinbase":
+            raise NotImplementedError(f"Unsupported exchange in bag: {exchange}")
+
+        _surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
+            cache,
+            subs,
+            initial_start,
+            initial_end,
+            granularity=granularity,
+        )
+        if missing_subscriptions:
+            missing_pairs = [sub["product_id"] for sub in missing_subscriptions]
+            print(
+                f"[Coinbase week/live] drawthrough missing={_format_subscription_keys(missing_subscriptions)}; "
+                f"backfilling full window for missing subscriptions"
+            )
+            cache.backfill_http(
+                missing_pairs,
+                initial_start,
+                initial_end,
+                granularity,
+                exchange=exchange,
+            )
+            _surface_df, _status_df, common_support_df, missing_subscriptions, common_timestamps = _bag_surface_state(
+                cache,
                 subs,
                 initial_start,
                 initial_end,
                 granularity=granularity,
             )
-            _, invalid_count = _log_bag_coverage_summary("HTTP verify", coinbase_statuses)
-            if invalid_count:
-                retry_pairs = [
-                    str(status["product_id"])
-                    for status in coinbase_statuses
-                    if not bool(status["covered"])
-                ]
-                print(
-                    f"[HTTP verify] retrying {len(retry_pairs)} incomplete subscriptions via HTTP backfill"
-                )
-                cache.backfill_http(
-                    retry_pairs,
-                    initial_start,
-                    initial_end,
-                    granularity,
-                    exchange=exchange,
-                )
-                coinbase_statuses = cache.verify_bag_contiguous_coverage(
-                    subs,
-                    initial_start,
-                    initial_end,
-                    granularity=granularity,
-                )
-                _log_bag_coverage_summary("HTTP verify", coinbase_statuses)
-        elif exchange == "binance":
-            cache.import_binance_archive(pairs, granularity)
+
+        gran_sec = int(granularity)
+        overlap_bars = max(live_http_overlap_candles, 1)
+        if common_timestamps:
+            latest_common = common_timestamps[-1]
+            fetch_start = max(
+                initial_start,
+                latest_common - timedelta(seconds=gran_sec * overlap_bars),
+            )
+            print(
+                f"[Coinbase week/live] drawthrough "
+                f"common_bars={len(common_timestamps)} "
+                f"latest_common={_utc_isoformat(latest_common)} "
+                f"tail_fetch={_utc_isoformat(fetch_start)} -> {_utc_isoformat(initial_end)}"
+            )
         else:
-            raise NotImplementedError(f"Unsupported exchange in bag: {exchange}")
+            fetch_start = initial_start
+            print(
+                f"[Coinbase week/live] drawthrough has no whole-bag common watermark; "
+                f"falling back to full-window fetch {_utc_isoformat(initial_start)} -> {_utc_isoformat(initial_end)}"
+            )
+
+        if fetch_start < initial_end:
+            cache.backfill_http(
+                pairs,
+                fetch_start,
+                initial_end,
+                granularity,
+                exchange=exchange,
+            )
 
     graph = _load_selected_pair_graph(
         selected_subscriptions,
@@ -1342,6 +1559,26 @@ def run_coinbase_week_http_then_live(
     )
     if not graph.edges or not graph.common_timestamps:
         raise RuntimeError("No candle data available after HTTP backfill")
+    materialized_keys = {_subscription_key(sub) for sub in graph.bag_subscriptions}
+    requested_keys = {_subscription_key(sub) for sub in selected_subscriptions}
+    if materialized_keys != requested_keys:
+        missing = [
+            {"exchange": exchange, "product_id": product_id}
+            for exchange, product_id in sorted(requested_keys - materialized_keys)
+        ]
+        extra = [
+            {"exchange": exchange, "product_id": product_id}
+            for exchange, product_id in sorted(materialized_keys - requested_keys)
+        ]
+        details = []
+        if missing:
+            details.append(f"missing={_format_subscription_keys(missing)}")
+        if extra:
+            details.append(f"extra={_format_subscription_keys(extra)}")
+        raise RuntimeError(
+            "Fixed Coinbase bag must materialize exactly as requested; refusing to continue after bag drift. "
+            + "; ".join(details)
+        )
     selected_subscriptions = list(graph.bag_subscriptions)
 
     model = HierarchicalReasoningModel(
@@ -1357,6 +1594,27 @@ def run_coinbase_week_http_then_live(
     )
     model.register_edges(list(graph.edges.keys()))
     model.load(checkpoint_path)
+    _print_coinbase_run_context(
+        stage="loaded",
+        bag_path=bag_path,
+        subscriptions=selected_subscriptions,
+        checkpoint_path=checkpoint_path,
+        training_db_path=training_db_path,
+        learning_rate=learning_rate,
+        y_depth=model.y_depth,
+        x_pixels=model.x_pixels,
+        curvature=model.curvature,
+        prediction_depth=model.prediction_depth,
+        granularity=granularity,
+        lookback_days=lookback_days,
+        device=device,
+        live=live,
+        live_train_interval=live_train_interval,
+        live_http_repair_seconds=live_http_repair_seconds,
+        live_http_overlap_candles=live_http_overlap_candles,
+        live_idle_restart_seconds=live_idle_restart_seconds,
+        model=model,
+    )
 
     print(
         f"[Coinbase week/live] training initial week: "
@@ -1403,8 +1661,8 @@ def run_coinbase_week_http_then_live(
         "pairs": len(selected_subscriptions),
         "subscriptions": selected_subscriptions,
         "bag_path": str(Path(bag_path).resolve()),
-        "window_start": initial_start.isoformat(),
-        "window_end": initial_end.isoformat(),
+        "window_start": _utc_isoformat(initial_start),
+        "window_end": _utc_isoformat(initial_end),
         "selection_policy": "explicit_fixed_bag",
         "timestamp_policy": "intersection",
     }
@@ -1462,13 +1720,6 @@ def run_coinbase_week_http_then_live(
             if purged:
                 print(f"[Coinbase live] purged {purged} poisoned future candles")
             window_start = now - timedelta(days=lookback_days)
-            cache.repair_http_overlap(
-                coinbase_pairs,
-                granularity=granularity,
-                overlap_candles=live_http_overlap_candles,
-                end=now,
-                exchange="coinbase",
-            )
             graph = _load_selected_pair_graph(
                 selected_subscriptions,
                 window_start,
@@ -1522,12 +1773,16 @@ def run_coinbase_week_http_then_live(
                 end_bar=validation_end_bar,
                 warmup_start_bar=start_bar,
             )
+            print(
+                f"[Coinbase live] model_cas={model.model_cas_signature()} "
+                f"rotary={_rotary_state_summary(model)}"
+            )
             cycle_params = {
                 **week_params,
                 "h_dim": model.h_dim,
                 "z_dim": model.z_dim,
-                "cycle_window_start": window_start.isoformat(),
-                "cycle_window_end": now.isoformat(),
+                "cycle_window_start": _utc_isoformat(window_start),
+                "cycle_window_end": _utc_isoformat(now),
                 "start_bar": start_bar,
                 "train_end_bar": train_end_bar,
                 "validation_end_bar": validation_end_bar,
@@ -1536,8 +1791,8 @@ def run_coinbase_week_http_then_live(
                 "pairs": len(selected_subscriptions),
                 "subscriptions": selected_subscriptions,
                 "bag_path": str(Path(bag_path).resolve()),
-                "window_start": window_start.isoformat(),
-                "window_end": now.isoformat(),
+                "window_start": _utc_isoformat(window_start),
+                "window_end": _utc_isoformat(now),
                 "total_bars": total_bars,
                 "selection_policy": "explicit_fixed_bag",
                 "timestamp_policy": "intersection",

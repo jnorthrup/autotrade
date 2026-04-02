@@ -23,17 +23,73 @@ import pandas as pd
 from hrm_model import HierarchicalReasoningModel
 from coin_graph import CoinGraph, EdgeState, NodeState
 from config import Config
+from graph_showdown import plan_walk_forward_split, run_walk_forward_validation
 
 import duckdb
+
+from pool_client import PoolClient, pool_is_running as _pool_is_running
+
+# ---------------------------------------------------------------------------
+# Pool-routing helpers
+# ---------------------------------------------------------------------------
+
+_pool_client = None
+
+
+def _use_pool() -> bool:
+    """Return True if the DuckDB pool server is available."""
+    global _pool_client
+    if _pool_client is None:
+        try:
+            if _pool_is_running():
+                _pool_client = PoolClient()
+            else:
+                _pool_client = False
+        except Exception:
+            _pool_client = False
+    return _pool_client is not False
+
+
+def _pool() -> PoolClient:
+    """Return the shared PoolClient instance (only valid when _use_pool())."""
+    return _pool_client
 
 
 # Default output path for daytrade model
 DEFAULT_OUTPUT_PATH = "model_weights_daytrade.pt"
+DEFAULT_DEVICE = "cpu"
 
 # Default time window for fine-tuning (last 60 days)
 DEFAULT_LOOKBACK_DAYS = 60
 DEFAULT_MIN_LOOKBACK_DAYS = 30
 DEFAULT_MAX_LOOKBACK_DAYS = 90
+
+
+def _training_status(total_loss: float, n_updates: int) -> str:
+    if n_updates <= 0:
+        return "no scored updates; warmup or maturity never completed"
+    return f"avg_loss={total_loss / n_updates:.6f}, n_updates={n_updates}"
+
+
+def _print_profile_summary(profile_stats: Dict[str, float]):
+    print("Profile summary:")
+    print(
+        f"  device={profile_stats.get('device_type', 'unknown')} "
+        f"bars={int(profile_stats.get('bars_processed', 0))} "
+        f"updates={int(profile_stats.get('n_updates', 0))}"
+    )
+    print(
+        f"  graph.update={profile_stats.get('graph_update_seconds', 0.0):.4f}s "
+        f"update_prices={profile_stats.get('update_prices_seconds', 0.0):.4f}s "
+        f"predict_prepare={profile_stats.get('predict_prepare_seconds', 0.0):.4f}s "
+        f"predict_forward={profile_stats.get('predict_forward_seconds', 0.0):.4f}s"
+    )
+    print(
+        f"  update_prepare={profile_stats.get('update_prepare_seconds', 0.0):.4f}s "
+        f"update_forward_backward={profile_stats.get('update_forward_backward_seconds', 0.0):.4f}s "
+        f"predict_edges={int(profile_stats.get('predict_edges', 0))} "
+        f"update_edges={int(profile_stats.get('update_edges', 0))}"
+    )
 
 
 def _load_bag(bag_path: str) -> List[str]:
@@ -55,20 +111,34 @@ def _get_recent_time_window(
     start = end - timedelta(days=lookback_days)
     
     # Verify data availability
-    with duckdb.connect(db_path) as conn:
-        available_pairs = set()
+    available_pairs = set()
+    if _use_pool():
         for pair in pairs:
             try:
-                row = conn.execute(
+                rows = _pool().execute(
                     """SELECT COUNT(*) FROM candles 
                     WHERE product_id = ? AND granularity = ?
-                    AND timestamp BETWEEN ? AND ?""",
+                    AND timestamp >= ? AND timestamp < ?""",
                     [pair, granularity, start, end],
-                ).fetchone()
-                if row and row[0] > 0:
+                )
+                if rows and rows[0][0] > 0:
                     available_pairs.add(pair)
             except Exception:
                 pass
+    else:
+        with duckdb.connect(db_path) as conn:
+            for pair in pairs:
+                try:
+                    row = conn.execute(
+                        """SELECT COUNT(*) FROM candles 
+                        WHERE product_id = ? AND granularity = ?
+                        AND timestamp >= ? AND timestamp < ?""",
+                        [pair, granularity, start, end],
+                    ).fetchone()
+                    if row and row[0] > 0:
+                        available_pairs.add(pair)
+                except Exception:
+                    pass
     
     print(f"Data available for {len(available_pairs)}/{len(pairs)} pairs in {lookback_days}d window")
     return start, end
@@ -79,7 +149,10 @@ def _make_subset_graph(
     selected_pairs: List[str],
 ) -> CoinGraph:
     """Create a subgraph with only the selected pairs and their edges."""
-    trial = CoinGraph(fee_rate=full_graph.fee_rate)
+    trial = CoinGraph(
+        fee_rate=full_graph.fee_rate,
+        min_pair_coverage=getattr(full_graph, "min_pair_coverage", 0.9),
+    )
     trial.all_pairs = selected_pairs
     
     pair_to_edges = {}
@@ -101,8 +174,10 @@ def _make_subset_graph(
                 trial.node_state.setdefault(base, NodeState())
                 trial.node_state.setdefault(quote, NodeState())
     
-    # Use full timestamps - training window controlled by start_bar/end_bar
-    trial.common_timestamps = full_graph.common_timestamps
+    if trial.edges and all(not callable(getattr(df, "index", None)) for df in trial.edges.values()):
+        trial._align_timestamps()
+    else:
+        trial.common_timestamps = full_graph.common_timestamps
     return trial
 
 
@@ -112,10 +187,13 @@ def run_training(
     start_bar: int = 0,
     end_bar: Optional[int] = None,
     print_every: int = 100,
+    profile_stats: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, int]:
     """Train model on graph bars. Returns (total_loss, n_updates)."""
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
+
+    model.set_profile_enabled(profile_stats is not None)
     
     ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
     bars_with_data = set()
@@ -125,31 +203,50 @@ def run_training(
     
     total_loss = 0.0
     n_updates = 0
+    graph_update_seconds = 0.0
     
     sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
     print(f"Training on {len(sorted_bars)} bars with data")
     
+    loop_start = time.perf_counter() if profile_stats is not None else None
     for i, bar_idx in enumerate(sorted_bars):
         if bar_idx >= len(graph.common_timestamps):
             break
-        
+
+        graph_update_start = time.perf_counter() if profile_stats is not None else None
         edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
+        if graph_update_start is not None:
+            graph_update_seconds += time.perf_counter() - graph_update_start
         
         if not edge_accels:
             continue
+
+        model.update_prices(graph, bar_idx)
         
-        if bar_idx >= model.prediction_depth:
+        if model.ready_for_prediction(bar_idx):
             model.predict(graph, bar_idx)
         
-        if bar_idx >= model.prediction_depth * 2:
+        if model.ready_for_update(bar_idx, edge_accels):
             loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
             if loss is not None:
                 total_loss += loss
                 n_updates += 1
         
         if i % print_every == 0 and i > 0:
-            avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-            print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}")
+            if n_updates > 0:
+                avg_loss = total_loss / n_updates
+                print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
+            else:
+                print(f"Bar {bar_idx}: warmup, candle history/prediction queues not full yet")
+
+    if profile_stats is not None:
+        profile_stats.clear()
+        profile_stats.update(model.get_profile_stats())
+        profile_stats['graph_update_seconds'] = graph_update_seconds
+        profile_stats['bars_processed'] = float(len(sorted_bars))
+        profile_stats['bars_with_data'] = float(len(sorted_bars))
+        profile_stats['n_updates'] = float(n_updates)
+        profile_stats['loop_seconds'] = time.perf_counter() - loop_start if loop_start is not None else 0.0
     
     return total_loss, n_updates
 
@@ -162,6 +259,8 @@ def finetune(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     exchange: str = 'coinbase',
     skip_fetch: bool = True,
+    profile: bool = False,
+    device: str = DEFAULT_DEVICE,
 ) -> None:
     """
     Fine-tune pretrained HRM model on fixed bag.
@@ -187,6 +286,7 @@ def finetune(
     print(f"\nUsing fixed bag: {len(selected_pairs)} pairs")
     print(f"Fine-tuning on last {lookback_days} days of data")
     print(f"Learning rate: {learning_rate}")
+    print(f"Device: {device}")
     print(f"Growth: DISABLED (no expansion during fine-tuning)")
     
     # Load coin graph with full data
@@ -228,6 +328,7 @@ def finetune(
         prediction_depth=1,
         H_layers=2,  # Will be overwritten by checkpoint
         L_layers=2,  # Will be overwritten by checkpoint
+        device=device,
     )
     model.register_edges(list(trial_graph.edges.keys()))
     
@@ -246,34 +347,61 @@ def finetune(
             param_group['lr'] = learning_rate
     print(f"Set fine-tuning learning rate: {learning_rate}")
     
-    # Determine training window (keep last portion for fine-tuning)
     total_bars = len(trial_graph.common_timestamps)
-    window_bars = min(int(lookback_days * 24 * 12), total_bars)  # ~5min bars
-    start_bar = max(0, total_bars - window_bars)
-    end_bar = total_bars
+    split = plan_walk_forward_split(total_bars, model)
+    if split is None:
+        raise ValueError("Not enough bars for walk-forward fine-tuning validation")
+    start_bar, train_end_bar, validation_end_bar = split
     
-    print(f"\nFine-tuning on bars {start_bar} to {end_bar} ({window_bars} bars, ~{lookback_days} days)")
+    print(
+        f"\nFine-tuning on bars {start_bar}:{train_end_bar} "
+        f"with walk-forward holdout {train_end_bar}:{validation_end_bar}"
+    )
     
     # Run fine-tuning (no growth - fixed architecture)
     print("\nStarting fine-tuning...")
+    profile_stats = {} if profile else None
     total_loss, n_updates = run_training(
         trial_graph, model,
         start_bar=start_bar,
-        end_bar=end_bar,
+        end_bar=train_end_bar,
         print_every=100,
+        profile_stats=profile_stats,
+    )
+    walk_forward_loss, walk_forward_updates = run_walk_forward_validation(
+        trial_graph,
+        model,
+        validation_start_bar=train_end_bar,
+        end_bar=validation_end_bar,
+        warmup_start_bar=start_bar,
     )
     
-    avg_loss = total_loss / n_updates if n_updates > 0 else 0.0
-    print(f"\nFine-tuning complete: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
+    print(f"\nFine-tuning complete: {_training_status(total_loss, n_updates)}")
+    if walk_forward_loss is not None:
+        print(
+            f"Walk-forward holdout: avg_loss={walk_forward_loss:.6f}, "
+            f"n_updates={walk_forward_updates}"
+        )
+    else:
+        print("Walk-forward holdout: no scored updates")
+    if profile_stats is not None:
+        _print_profile_summary(profile_stats)
     
     # Save with timestamp metadata
-    print(f"\nSaving fine-tuned model to: {output_path}")
-    model.save(output_path, checkpoint_type="finetuned_daytrade")
+    saved_checkpoint = False
+    if n_updates > 0 and walk_forward_loss is not None:
+        print(f"\nSaving fine-tuned model to: {output_path}")
+        model.save(output_path, checkpoint_type="finetuned_daytrade")
+        saved_checkpoint = True
+    else:
+        print(f"\nSkipping save to {output_path}: walk-forward validation did not score")
     
     print("=" * 60)
-    print(f"Saved fine-tuned model to: {output_path}")
+    if saved_checkpoint:
+        print(f"Saved fine-tuned model to: {output_path}")
     print(f"  pretrained_from: {pretrained_path}")
     print(f"  bag: {bag_path}")
+    print("  promotion: disabled for fixed-bag fine-tune path")
     print(f"  learning_rate: {learning_rate}")
     print(f"  lookback_days: {lookback_days}")
     print("=" * 60)
@@ -326,6 +454,18 @@ def main():
         default=True,
         help='Skip fetching new data, use cached (default: True)'
     )
+    parser.add_argument(
+        '--profile',
+        action='store_true',
+        help='Collect per-stage timing for the training loop'
+    )
+    parser.add_argument(
+        '--device',
+        type=str,
+        default=DEFAULT_DEVICE,
+        choices=['auto', 'cpu', 'mps', 'cuda'],
+        help=f"Runtime device (default: {DEFAULT_DEVICE})"
+    )
     
     args = parser.parse_args()
     
@@ -341,6 +481,8 @@ def main():
         lookback_days=args.lookback_days,
         exchange=args.exchange,
         skip_fetch=args.skip_fetch,
+        profile=args.profile,
+        device=args.device,
     )
 
 

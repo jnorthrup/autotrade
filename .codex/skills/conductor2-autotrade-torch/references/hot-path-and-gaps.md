@@ -11,11 +11,10 @@
 ## Current Root Observations
 
 - `coin_graph.py` aligns timestamps by union, not intersection, and handles missing bars per edge at update time.
-- `HierarchicalReasoningModel.predict()` rebuilds `_get_fisheye(edge)` twice for the same edge and bar: once for inference and once for the queued training frame.
-- `HierarchicalReasoningModel.update()` later replays the queued copied row instead of consuming a shared muxed feature object.
-- `HRMEdgePredictor.forward()` wraps the recurrent H/L core in `torch.no_grad()`, which blocks backbone gradients during training.
-- `graph_showdown.py` still advertises `--z-dim 8`, which violates the power-of-4 rule, and the root predictor does not yet honor an independent `z` path anyway.
-- `HRMEdgePredictor.grow_hidden_size()` currently prepares prediction-head tensors as if the heads were square hidden-to-hidden projections, even though the heads are defined as `Linear(hidden_size, 1)`. Treat hidden-size growth as unsafe until inspected and fixed.
+- The root shell now batches per-bar predict/update tensor work, but fisheye row construction and `coin_graph.py` still spend real time in Python/Pandas. Profile before claiming the device is the bottleneck.
+- Readiness is now driven by observed per-edge candle counts rather than global `bar_idx`, so any future refactor must preserve per-edge maturity semantics.
+- `graph_showdown.py` keeps the general training shell on `auto`, while day-trading / fine-tune paths should explicitly choose `cpu` unless there is a measured reason not to.
+- `HRMEdgePredictor.grow_hidden_size()` still prepares prediction-head tensors as if the heads were square hidden-to-hidden projections, even though the heads are defined as `Linear(hidden_size, 1)`. Treat hidden-size growth as unsafe until inspected and fixed.
 
 ## How To Use This File
 

@@ -4,6 +4,8 @@ import sys
 import os
 import tempfile
 
+import torch
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from graph_showdown import run_training
@@ -33,10 +35,11 @@ def main():
         n_edges=len(graph.edges),
         h_dim=4,
         z_dim=4,
-        y_depth=200,
+        y_depth=16,
         x_pixels=20,
         curvature=2.0,
         prediction_depth=1,
+        device="cpu",
     )
     model.register_edges(list(graph.edges.keys()))
     print(f"Model params: {sum(p.numel() for p in model._model.parameters())}")
@@ -61,15 +64,19 @@ def main():
     try:
         model.save(tmp_path)
         print(f"Saved checkpoint to {tmp_path}")
+        saved = torch.load(tmp_path, map_location="cpu")
+        assert "model_cas" in saved and saved["model_cas"], "Checkpoint missing model_cas"
+        assert saved["model_cas"] == model.model_cas_signature(), "Saved model_cas mismatch"
 
         model2 = HierarchicalReasoningModel(
             n_edges=len(graph.edges),
             h_dim=4,
             z_dim=4,
-            y_depth=200,
+            y_depth=16,
             x_pixels=20,
             curvature=2.0,
             prediction_depth=1,
+            device="cpu",
         )
         model2.register_edges(list(graph.edges.keys()))
         model2.load(tmp_path)

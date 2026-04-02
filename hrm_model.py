@@ -24,10 +24,14 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from bag_io import build_bag_model_frames as build_bag_model_frames_df
+from bag_io import bind_spend_budgets
 
 try:
     import sympy  # noqa: F401
@@ -193,6 +197,7 @@ class HRMEdgePredictor(nn.Module):
         self,
         x_pixels: int = 20,
         hidden_size: int = 64,
+        num_nodes: int = 1,
         num_heads: int = 4,
         H_layers: int = 2,
         L_layers: int = 2,
@@ -205,6 +210,7 @@ class HRMEdgePredictor(nn.Module):
         super().__init__()
         self.x_pixels = x_pixels
         self.hidden_size = hidden_size
+        self.num_nodes = max(1, int(num_nodes))
         self.num_heads = num_heads
         self.H_layers = H_layers
         self.L_layers = L_layers
@@ -214,6 +220,13 @@ class HRMEdgePredictor(nn.Module):
 
         # Input embedding from fisheye features
         self.embed = FisheyeEmbedding(x_pixels, hidden_size)
+        self.base_node_embed = nn.Embedding(self.num_nodes, hidden_size)
+        self.quote_node_embed = nn.Embedding(self.num_nodes, hidden_size)
+        self.pair_index_proj = nn.Linear(4, hidden_size)
+        nn.init.zeros_(self.base_node_embed.weight)
+        nn.init.zeros_(self.quote_node_embed.weight)
+        nn.init.zeros_(self.pair_index_proj.weight)
+        nn.init.zeros_(self.pair_index_proj.bias)
 
         # Rotary position embeddings
         self.rotary_emb = RotaryEmbedding(
@@ -248,6 +261,46 @@ class HRMEdgePredictor(nn.Module):
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
 
+    def resize_node_embeddings(self, new_num_nodes: int):
+        """Resize bag-index vocab without rebuilding the whole predictor."""
+        new_num_nodes = max(1, int(new_num_nodes))
+        if new_num_nodes == self.num_nodes:
+            return
+
+        base = nn.Embedding(new_num_nodes, self.hidden_size).to(self.base_node_embed.weight.device)
+        quote = nn.Embedding(new_num_nodes, self.hidden_size).to(self.quote_node_embed.weight.device)
+        nn.init.zeros_(base.weight)
+        nn.init.zeros_(quote.weight)
+
+        rows_to_copy = min(self.num_nodes, new_num_nodes)
+        with torch.no_grad():
+            base.weight[:rows_to_copy] = self.base_node_embed.weight[:rows_to_copy]
+            quote.weight[:rows_to_copy] = self.quote_node_embed.weight[:rows_to_copy]
+
+        self.base_node_embed = base
+        self.quote_node_embed = quote
+        self.num_nodes = new_num_nodes
+
+    def _pair_input_embedding(self, base_idx: Tensor, quote_idx: Tensor) -> Tensor:
+        base_idx = base_idx.long()
+        quote_idx = quote_idx.long()
+        base_emb = self.base_node_embed(base_idx)
+        quote_emb = self.quote_node_embed(quote_idx)
+
+        denom = float(max(1, self.num_nodes - 1))
+        base_norm = base_idx.to(dtype=base_emb.dtype) / denom
+        quote_norm = quote_idx.to(dtype=base_emb.dtype) / denom
+        pair_scalars = torch.stack(
+            [
+                base_norm,
+                quote_norm,
+                base_norm - quote_norm,
+                base_norm * quote_norm,
+            ],
+            dim=-1,
+        )
+        return (base_emb + quote_emb + self.pair_index_proj(pair_scalars)).unsqueeze(1)
+
     def init_carry(self, batch_size: int, device: torch.device) -> HRMEdgeCarry:
         """Initialize empty carry states."""
         return HRMEdgeCarry(
@@ -258,6 +311,8 @@ class HRMEdgePredictor(nn.Module):
     def forward(
         self,
         fisheye: Tensor,
+        base_idx: Optional[Tensor] = None,
+        quote_idx: Optional[Tensor] = None,
         carry: Optional[HRMEdgeCarry] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, HRMEdgeCarry]:
         """
@@ -265,6 +320,8 @@ class HRMEdgePredictor(nn.Module):
 
         Args:
             fisheye: (batch, x_pixels) per-edge fisheye features
+            base_idx: (batch,) ordered base-coin bag index
+            quote_idx: (batch,) ordered quote-coin bag index
             carry: optional carry state from previous step
 
         Returns:
@@ -276,6 +333,10 @@ class HRMEdgePredictor(nn.Module):
 
         # Input embedding
         input_emb = self.embed(fisheye)  # (batch, 1, hidden_size)
+        if base_idx is not None or quote_idx is not None:
+            if base_idx is None or quote_idx is None:
+                raise ValueError("base_idx and quote_idx must be provided together")
+            input_emb = input_emb + self._pair_input_embedding(base_idx, quote_idx)
 
         # Initialize carry
         if carry is None:
@@ -302,11 +363,90 @@ class HRMEdgePredictor(nn.Module):
 
     # ── Rotation growth ────────────────────────────────────────────────────────
 
-    def _make_quadrant_block(self, blocks: List[Tensor]) -> Tensor:
-        """Stack 4 rotated blocks as 2×2 quadrant matrix."""
-        top = torch.cat([blocks[0], blocks[1]], dim=0)
-        bot = torch.cat([blocks[2], blocks[3]], dim=0)
-        return torch.cat([top, bot], dim=1)
+    @staticmethod
+    def _rotate_same_shape(param: Tensor, rotation: int) -> Tensor:
+        if rotation == 0:
+            return param.detach().clone()
+        if param.dim() == 1:
+            return torch.flip(param, dims=(0,))
+        if param.dim() < 2:
+            return param.detach().clone()
+        if param.shape[-2] == param.shape[-1]:
+            turns = {90: 1, 180: 2, 270: 3}[rotation]
+            return torch.rot90(param, k=turns, dims=(-2, -1))
+        if rotation == 180:
+            return torch.flip(param, dims=(-2, -1))
+        if rotation == 90:
+            return torch.flip(param, dims=(-2,))
+        if rotation == 270:
+            return torch.flip(param, dims=(-1,))
+        raise ValueError(f"Unsupported rotation: {rotation}")
+
+    @classmethod
+    def _growth_variants(cls, param: Tensor) -> List[Tensor]:
+        if param.dim() >= 2 and param.shape[-2] == param.shape[-1]:
+            return [
+                cls._rotate_same_shape(param, 0),
+                cls._rotate_same_shape(param, 180),
+                cls._rotate_same_shape(param, 90),
+                cls._rotate_same_shape(param, 270),
+            ]
+        rot180 = cls._rotate_same_shape(param, 180)
+        # Axis-only fallback uses 0,180,180,0 to preserve the original block.
+        return [
+            cls._rotate_same_shape(param, 0),
+            rot180,
+            rot180.detach().clone(),
+            cls._rotate_same_shape(param, 0),
+        ]
+
+    @classmethod
+    def _expand_axis_to(cls, param: Tensor, axis: int, target_size: int) -> Tensor:
+        current_size = param.shape[axis]
+        if current_size == target_size:
+            return param.detach().clone()
+        if current_size > target_size:
+            slicer = [slice(None)] * param.dim()
+            slicer[axis] = slice(0, target_size)
+            return param[tuple(slicer)].detach().clone()
+
+        variants = cls._growth_variants(param)
+        pieces: List[Tensor] = []
+        remaining = target_size
+        variant_idx = 0
+        while remaining > 0:
+            block = variants[variant_idx % len(variants)]
+            block_size = block.shape[axis]
+            if block_size <= remaining:
+                pieces.append(block.detach().clone())
+                remaining -= block_size
+            else:
+                slicer = [slice(None)] * block.dim()
+                slicer[axis] = slice(0, remaining)
+                pieces.append(block[tuple(slicer)].detach().clone())
+                remaining = 0
+            variant_idx += 1
+        return torch.cat(pieces, dim=axis)
+
+    @classmethod
+    def _expand_param_to_shape(cls, param: Tensor, target_shape: torch.Size) -> Tensor:
+        if tuple(param.shape) == tuple(target_shape):
+            return param.detach().clone()
+        if param.dim() != len(target_shape):
+            raise ValueError(f"Cannot expand {tuple(param.shape)} into {tuple(target_shape)}")
+
+        expanded = param.detach().clone()
+        if expanded.dim() == 1:
+            return cls._expand_axis_to(expanded, 0, target_shape[0])
+
+        if expanded.shape[1] != target_shape[1]:
+            expanded = cls._expand_axis_to(expanded, 1, target_shape[1])
+        if expanded.shape[0] != target_shape[0]:
+            expanded = cls._expand_axis_to(expanded, 0, target_shape[0])
+        if tuple(expanded.shape) != tuple(target_shape):
+            slicer = tuple(slice(0, size) for size in target_shape)
+            expanded = expanded[slicer].detach().clone()
+        return expanded
 
     def grow_hidden_size(self, new_hidden_size: int):
         """
@@ -323,60 +463,32 @@ class HRMEdgePredictor(nn.Module):
         factor = new_hidden_size // old_hs
         if factor != 4:
             raise ValueError(f"Can only grow by 4×, got {factor}×")
+        device = next(self.parameters()).device
+        grown = HRMEdgePredictor(
+            x_pixels=self.x_pixels,
+            hidden_size=new_hidden_size,
+            num_nodes=self.num_nodes,
+            num_heads=max(1, new_hidden_size // 64),
+            H_layers=self.H_layers,
+            L_layers=self.L_layers,
+            H_cycles=self.H_cycles,
+            L_cycles=self.L_cycles,
+            expansion=self.expansion,
+        ).to(device)
 
-        sd = self.state_dict()
-        new_sd = {}
+        old_sd = self.state_dict()
+        target_sd = grown.state_dict()
+        expanded_sd = {}
+        for name, target in target_sd.items():
+            source = old_sd.get(name)
+            if source is None:
+                expanded_sd[name] = target
+                continue
+            expanded = self._expand_param_to_shape(source, target.shape).to(dtype=target.dtype, device=target.device)
+            expanded_sd[name] = expanded
 
-        for name, param in sd.items():
-            if 'H_init' in name or 'L_init' in name:
-                if param.dim() == 1:
-                    new_sd[name] = torch.cat([param]*4, dim=0)
-                else:
-                    new_sd[name] = param
-            elif 'embed.proj.weight' in name:
-                W = param
-                rotated = [W, rotate_180(W), rotate_90(W), rotate_270(W)]
-                new_W = torch.cat(rotated, dim=0)
-                new_sd[name] = new_W
-            elif 'embed.proj.bias' in name:
-                new_sd[name] = torch.cat([param]*4, dim=0)
-            elif 'fraction_head' in name or 'ptt_head' in name or 'stop_head' in name:
-                if 'weight' in name:
-                    new_sd[name] = nn.init.zeros_(torch.empty(new_hidden_size, new_hidden_size))
-                else:
-                    new_sd[name] = nn.init.zeros_(torch.empty(new_hidden_size))
-            elif 'H_level.layers' in name or 'L_level.layers' in name:
-                new_sd[name] = self._expand_param(name, param, old_hs, new_hidden_size)
-            else:
-                new_sd[name] = param
-
-        self.hidden_size = new_hidden_size
-        self.num_heads = max(1, new_hidden_size // 64)
-        self.load_state_dict(new_sd, strict=False)
-
-        for head in [self.fraction_head, self.ptt_head, self.stop_head]:
-            nn.init.zeros_(head.weight)
-            nn.init.zeros_(head.bias)
-
-    def _expand_param(self, name: str, param: Tensor, old_hs: int, new_hs: int) -> Tensor:
-        """Expand a parameter by 4× in the hidden dimension."""
-        if 'q_proj.weight' in name or 'k_proj.weight' in name or 'v_proj.weight' in name:
-            rotated = [param, rotate_180(param), rotate_90(param), rotate_270(param)]
-            return torch.cat(rotated, dim=0)
-        elif 'o_proj.weight' in name:
-            rotated = [param, rotate_180(param), rotate_90(param), rotate_270(param)]
-            top = torch.cat([rotated[0], rotated[1]], dim=0)
-            bot = torch.cat([rotated[2], rotated[3]], dim=0)
-            return torch.cat([top, bot], dim=1)
-        elif 'gate_up_proj.weight' in name:
-            rotated = [param, rotate_180(param), rotate_90(param), rotate_270(param)]
-            return torch.cat(rotated, dim=1)
-        elif 'down_proj.weight' in name:
-            rotated = [param, rotate_180(param), rotate_90(param), rotate_270(param)]
-            return torch.cat(rotated, dim=0)
-        elif 'bias' in name:
-            return torch.cat([param]*4, dim=0)
-        return param
+        grown.load_state_dict(expanded_sd, strict=False)
+        return grown
 
     def grow_layers(self, level: str = 'H'):
         """
@@ -407,10 +519,7 @@ class HRMEdgePredictor(nn.Module):
                 else:
                     new_sd = {}
                     for name, param in src_sd.items():
-                        if 'weight' in name:
-                            new_sd[name] = rot_fn(param)
-                        else:
-                            new_sd[name] = param
+                        new_sd[name] = self._rotate_same_shape(param, rotation)
                     new_layer.load_state_dict(new_sd)
                 new_layers_list.append(new_layer)
 
@@ -463,6 +572,7 @@ class HierarchicalReasoningModel:
         self.edge_names: List[Tuple[str, ...]] = []
         self.node_names: List[str] = []
         self.node_to_idx: Dict[str, int] = {}
+        self.num_nodes = 0
 
         self._model: Optional[HRMEdgePredictor] = None
         self._optimizer: Optional[torch.optim.Optimizer] = None
@@ -488,6 +598,7 @@ class HierarchicalReasoningModel:
             'curvature': self.curvature,
             'h_dim': self.h_dim,
             'z_dim': self.z_dim,
+            'num_nodes': int(self.num_nodes or 0),
             'prediction_depth': self.prediction_depth,
             'H_layers': self.H_layers,
             'L_layers': self.L_layers,
@@ -518,6 +629,7 @@ class HierarchicalReasoningModel:
         self._model = HRMEdgePredictor(
             x_pixels=self.x_pixels,
             hidden_size=self.h_dim,
+            num_nodes=max(1, self.num_nodes or len(self.node_names) or 1),
             num_heads=max(1, self.h_dim // 64),
             H_layers=self.H_layers,
             L_layers=self.L_layers,
@@ -555,12 +667,17 @@ class HierarchicalReasoningModel:
         if x_pixels is None and 'embed.proj.weight' in model_state:
             x_pixels = int(model_state['embed.proj.weight'].shape[1])
 
+        num_nodes = state.get('num_nodes')
+        if num_nodes is None and 'base_node_embed.weight' in model_state:
+            num_nodes = int(model_state['base_node_embed.weight'].shape[0])
+
         return {
             'x_pixels': int(x_pixels) if x_pixels is not None else None,
             'y_depth': int(state['y_depth']) if 'y_depth' in state else None,
             'curvature': float(state['curvature']) if 'curvature' in state else None,
             'h_dim': int(h_dim) if h_dim is not None else None,
             'z_dim': int(z_dim) if z_dim is not None else None,
+            'num_nodes': int(num_nodes) if num_nodes is not None else None,
             'prediction_depth': int(state['prediction_depth']) if 'prediction_depth' in state else None,
             'H_layers': int(state['H_layers']) if 'H_layers' in state else cls._count_layers(model_state, 'H_level'),
             'L_layers': int(state['L_layers']) if 'L_layers' in state else cls._count_layers(model_state, 'L_level'),
@@ -597,10 +714,60 @@ class HierarchicalReasoningModel:
             self.node_names = sorted(node_set)
 
         self.node_to_idx = {n: i for i, n in enumerate(self.node_names)}
+        self.num_nodes = len(self.node_names)
         if self._model is None:
             self._build_model()
         else:
+            self._model.resize_node_embeddings(max(1, self.num_nodes))
             self._reset_edge_runtime_state()
+
+    def _edge_node_indices(self, edge: Tuple[str, ...]) -> Tuple[int, int]:
+        if len(edge) == 2:
+            base, quote = edge
+        elif len(edge) == 3:
+            _, base, quote = edge
+        else:
+            raise ValueError(f"Unsupported edge shape: {edge!r}")
+        return self.node_to_idx[str(base)], self.node_to_idx[str(quote)]
+
+    def _edge_index_batch(self, edges: List[Tuple[str, ...]]) -> Tuple[Tensor, Tensor]:
+        base_idx, quote_idx = zip(*(self._edge_node_indices(edge) for edge in edges))
+        return (
+            torch.as_tensor(np.asarray(base_idx, dtype=np.int64), device=self._device),
+            torch.as_tensor(np.asarray(quote_idx, dtype=np.int64), device=self._device),
+        )
+
+    def build_bag_model_frames(
+        self,
+        graph,
+        bar_idx: int,
+        *,
+        value_asset: str = "USD",
+        free_qty=None,
+        reserved_qty=None,
+        route_discount=None,
+    ):
+        if not self.edge_names:
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+        fisheye_map = {edge: self._get_fisheye(edge) for edge in self.edge_names}
+        carry_map = {edge: self._carry.get(edge) for edge in self.edge_names}
+        return build_bag_model_frames_df(
+            graph,
+            bar_idx=bar_idx,
+            edge_names=self.edge_names,
+            node_to_idx=self.node_to_idx,
+            value_asset=value_asset,
+            edge_fisheyes=fisheye_map,
+            edge_carries=carry_map,
+            free_qty=free_qty,
+            reserved_qty=reserved_qty,
+            route_discount=route_discount,
+        )
+
+    @staticmethod
+    def bind_spend_budgets(pred_df: pd.DataFrame, node_state_df: pd.DataFrame) -> pd.DataFrame:
+        return bind_spend_budgets(pred_df, node_state_df)
 
     def _get_fisheye(self, edge: Tuple[str, ...]) -> List[float]:
         closes = self._close_buffer.get(edge, [])
@@ -728,10 +895,16 @@ class HierarchicalReasoningModel:
             df = graph.edges.get(edge)
             if df is None or ts not in df.index:
                 continue
-            close_value = df.loc[ts, 'close']
-            if hasattr(close_value, 'iloc'):
-                close_value = close_value.iloc[-1]
-            close = float(close_value)
+            row = df.loc[ts]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[-1]
+            if hasattr(graph, "edge_price_components"):
+                close = float(graph.edge_price_components(edge, row)["close"])
+            else:
+                close_value = row.get("close", 0.0)
+                close = float(close_value)
+                if getattr(graph, "edge_is_inverted", {}).get(edge, False) and close > 0:
+                    close = 1.0 / close
             buf = self._close_buffer[edge]
             buf.append(close)
             if len(buf) > self._max_history:
@@ -756,6 +929,7 @@ class HierarchicalReasoningModel:
         prep_start = time.perf_counter() if self._profile_enabled else None
         fisheye_rows = [self._get_fisheye(edge) for edge in ready_edges]
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        base_idx_batch, quote_idx_batch = self._edge_index_batch(ready_edges)
         input_carry = self._build_batch_carry(ready_edges)
         if prep_start is not None:
             self._record_profile('predict_prepare_seconds', time.perf_counter() - prep_start)
@@ -763,7 +937,12 @@ class HierarchicalReasoningModel:
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
         with torch.no_grad():
-            fraction, ptt, stop, output_carry = self._model(fisheye_batch, input_carry)
+            fraction, ptt, stop, output_carry = self._model(
+                fisheye_batch,
+                base_idx_batch,
+                quote_idx_batch,
+                input_carry,
+            )
         self._sync_device_for_profile()
         if fwd_start is not None:
             self._record_profile('predict_forward_seconds', time.perf_counter() - fwd_start)
@@ -828,6 +1007,7 @@ class HierarchicalReasoningModel:
             return None
 
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        base_idx_batch, quote_idx_batch = self._edge_index_batch(matured_edges)
         carry_batch = self._concat_carries(carry_rows)
         frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
         ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
@@ -838,7 +1018,12 @@ class HierarchicalReasoningModel:
         self._optimizer.zero_grad(set_to_none=True)
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
-        pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye_batch, carry_batch)
+        pred_frac, pred_ptt, pred_stop, _ = self._model(
+            fisheye_batch,
+            base_idx_batch,
+            quote_idx_batch,
+            carry_batch,
+        )
         frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
         ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
         stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
@@ -911,13 +1096,19 @@ class HierarchicalReasoningModel:
             return None
 
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        base_idx_batch, quote_idx_batch = self._edge_index_batch(matured_edges)
         carry_batch = self._concat_carries(carry_rows)
         frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
         ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
         stop_targets_tensor = torch.as_tensor(np.asarray(stop_targets, dtype=np.float32), device=self._device)
 
         with torch.no_grad():
-            pred_frac, pred_ptt, pred_stop, _ = self._model(fisheye_batch, carry_batch)
+            pred_frac, pred_ptt, pred_stop, _ = self._model(
+                fisheye_batch,
+                base_idx_batch,
+                quote_idx_batch,
+                carry_batch,
+            )
             frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
             ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
             stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
@@ -945,6 +1136,7 @@ class HierarchicalReasoningModel:
             'curvature': self.curvature,
             'h_dim': self.h_dim,
             'z_dim': self.z_dim,
+            'num_nodes': int(self.num_nodes or getattr(self._model, 'num_nodes', 0) or 0),
             'prediction_depth': self.prediction_depth,
             'H_layers': self.H_layers,
             'L_layers': self.L_layers,
@@ -975,7 +1167,12 @@ class HierarchicalReasoningModel:
         self._apply_checkpoint_config(state)
 
         self._build_model()
-        self._model.load_state_dict(state['model'])
+        missing, unexpected = self._model.load_state_dict(state['model'], strict=False)
+        if missing or unexpected:
+            print(
+                f"Checkpoint parameter drift for {path}: "
+                f"missing={sorted(missing)} unexpected={sorted(unexpected)}"
+            )
         print(
             f"Loaded checkpoint {path}: "
             f"x_pixels={self.x_pixels}, y_depth={self.y_depth}, "
@@ -1001,9 +1198,10 @@ class HierarchicalReasoningModel:
                 new_size = current * 4
             else:
                 new_size = current * 4
-            self._model.grow_hidden_size(new_size)
+            self._model = self._model.grow_hidden_size(new_size).to(self._device)
             self.h_dim = self._model.hidden_size
             self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+            self._reset_edge_runtime_state()
         elif dim in ('H', 'L'):
             self._model.grow_layers(dim)
             if dim == 'H':
@@ -1011,6 +1209,7 @@ class HierarchicalReasoningModel:
             else:
                 self.L_layers = self._model.L_layers
             self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+            self._reset_edge_runtime_state()
 
 
 # ── Backwards compat ──────────────────────────────────────────────────────────

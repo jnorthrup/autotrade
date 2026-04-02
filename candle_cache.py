@@ -15,13 +15,23 @@ from config import Config
 from pool_client import PoolClient, pool_is_running, DEFAULT_SOCKET
 
 CHUNK_CANDLES = 350
-INITIAL_WORKERS = 8
-MAX_RPS = 7.0
+INITIAL_WORKERS = 4
+MAX_RPS = 3.0
+HTTP_429_COOLDOWN_SECONDS = 15.0
 
 _db_lock = threading.Lock()
 
 def _utc_now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _utc_isoformat(value: datetime) -> str:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.isoformat().replace("+00:00", "Z")
 
 
 def _max_reasonable_future() -> pd.Timestamp:
@@ -218,7 +228,6 @@ def _bag_window_id(
 def _bag_surface_view_name_for_window(bag_window_id: str) -> str:
     return f"bag_surface_{bag_window_id}"
 
-
 def _bag_thresholds_view_name(
     subscriptions: List[Dict[str, str]],
     start: datetime,
@@ -235,19 +244,30 @@ class _TokenBucket:
         self._tokens = rate
         self._last = time.monotonic()
         self._lock = threading.Lock()
+        self._pause_until = 0.0
 
     def acquire(self):
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                pause_wait = max(0.0, self._pause_until - now)
+                if pause_wait > 0:
+                    wait = pause_wait
+                else:
+                    self._tokens = min(self._rate, self._tokens + (now - self._last) * self._rate)
+                    self._last = now
+                    if self._tokens >= 1.0:
+                        self._tokens -= 1.0
+                        return
+                    wait = (1.0 - self._tokens) / self._rate
+            time.sleep(wait)
+
+    def pause(self, seconds: float):
         with self._lock:
             now = time.monotonic()
-            self._tokens = min(self._rate, self._tokens + (now - self._last) * self._rate)
-            self._last = now
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return
-            wait = (1.0 - self._tokens) / self._rate
-        time.sleep(wait)
-        with self._lock:
-            self._tokens = max(0.0, self._tokens - 1.0)
+            self._pause_until = max(self._pause_until, now + max(0.0, seconds))
+            self._tokens = 0.0
+            self._last = self._pause_until
 
 
 class CandleCache:
@@ -258,6 +278,65 @@ class CandleCache:
         self._concurrency = INITIAL_WORKERS
         self._concurrency_lock = threading.Lock()
         self._bucket = _TokenBucket(MAX_RPS)
+
+    def validate_coinbase_products(
+        self,
+        product_ids: List[str],
+        require_online_spot: bool = True,
+    ) -> Dict[str, List[str]]:
+        requested = sorted({str(pid).strip() for pid in product_ids if str(pid).strip()})
+        if not requested:
+            return {"valid": [], "missing": [], "invalid": []}
+
+        response = self.client.get_public_products(
+            product_ids=requested,
+            get_all_products=False,
+        )
+        products = {
+            str(product.product_id): product
+            for product in getattr(response, "products", []) or []
+        }
+
+        missing = [pid for pid in requested if pid not in products]
+        invalid: List[str] = []
+        valid: List[str] = []
+        for pid in requested:
+            product = products.get(pid)
+            if product is None:
+                continue
+            if require_online_spot:
+                bad = []
+                if str(getattr(product, "product_type", "")).upper() != "SPOT":
+                    bad.append(f"type={getattr(product, 'product_type', None)}")
+                if str(getattr(product, "status", "")).lower() != "online":
+                    bad.append(f"status={getattr(product, 'status', None)}")
+                for field in (
+                    "is_disabled",
+                    "trading_disabled",
+                    "cancel_only",
+                    "limit_only",
+                    "post_only",
+                    "view_only",
+                ):
+                    if bool(getattr(product, field, False)):
+                        bad.append(f"{field}=True")
+                if bad:
+                    invalid.append(f"{pid} ({', '.join(bad)})")
+                    continue
+            valid.append(pid)
+        return {"valid": valid, "missing": missing, "invalid": invalid}
+
+    def _note_rate_limit(self, exchange: str, product_id: str, protocol_label: str):
+        with self._concurrency_lock:
+            next_concurrency = max(1, self._concurrency - 1)
+            changed = next_concurrency != self._concurrency
+            self._concurrency = next_concurrency
+        self._bucket.pause(HTTP_429_COOLDOWN_SECONDS)
+        change_text = f", concurrency → {next_concurrency}" if changed else ""
+        print(
+            f"  [{protocol_label}][{exchange}][{product_id}] "
+            f"429 hit{change_text}, global cooldown {int(HTTP_429_COOLDOWN_SECONDS)}s"
+        )
 
     def _init_db(self):
         self._ensure_candles_schema()
@@ -1200,6 +1279,246 @@ class CandleCache:
         )
         return df.sort_values(["exchange", "product_id", "timestamp"]).reset_index(drop=True)
 
+    def _bag_values_sql_and_params(
+        self,
+        subscriptions: List[Dict[str, str]],
+    ) -> Tuple[str, List[str]]:
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            raise ValueError("Cannot build a bag query with no subscriptions")
+        values_sql = ", ".join(["(?, ?)"] * len(deduped))
+        params: List[str] = []
+        for sub in deduped:
+            params.extend([str(sub["exchange"]), str(sub["product_id"])])
+        return values_sql, params
+
+    def query_bag_surface(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+    ) -> pd.DataFrame:
+        values_sql, bag_params = self._bag_values_sql_and_params(subscriptions)
+        sql = f"""
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            )
+            SELECT
+                c.exchange,
+                c.product_id,
+                c.timestamp,
+                c.open,
+                c.high,
+                c.low,
+                c.close,
+                c.volume,
+                c.granularity
+            FROM candles AS c
+            INNER JOIN bag AS b
+                ON c.exchange = b.exchange
+               AND c.product_id = b.product_id
+            WHERE c.granularity = ?
+              AND c.timestamp >= ?
+              AND c.timestamp < ?
+            ORDER BY c.exchange, c.product_id, c.timestamp
+        """
+        params: List = [*bag_params, granularity, start, end]
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql, params)
+            columns = [
+                "exchange",
+                "product_id",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "granularity",
+            ]
+            return pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        with duckdb.connect(self.db_path) as conn:
+            return conn.execute(sql, params).df()
+
+    def query_bag_span_status(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+    ) -> pd.DataFrame:
+        values_sql, bag_params = self._bag_values_sql_and_params(subscriptions)
+        sql = f"""
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            ),
+            observed AS (
+                SELECT
+                    b.exchange,
+                    b.product_id,
+                    COUNT(DISTINCT c.timestamp) AS actual_count,
+                    MIN(c.timestamp) AS first_timestamp,
+                    MAX(c.timestamp) AS last_timestamp
+                FROM bag AS b
+                LEFT JOIN candles AS c
+                  ON c.exchange = b.exchange
+                 AND c.product_id = b.product_id
+                 AND c.granularity = ?
+                 AND c.timestamp >= ?
+                 AND c.timestamp < ?
+                GROUP BY b.exchange, b.product_id
+            )
+            SELECT
+                exchange,
+                product_id,
+                ?::BIGINT AS expected_count,
+                actual_count::BIGINT AS actual_count,
+                CASE
+                    WHEN ?::BIGINT <= 0 THEN 1.0
+                    ELSE LEAST(1.0, actual_count::DOUBLE / ?::DOUBLE)
+                END AS coverage_ratio,
+                first_timestamp,
+                last_timestamp,
+                ?::TIMESTAMP AS window_start,
+                ?::TIMESTAMP AS window_end,
+                ?::VARCHAR AS granularity
+            FROM observed
+            ORDER BY exchange, product_id
+        """
+        expected = _expected_candle_count(start, end, granularity)
+        params: List = [
+            *bag_params,
+            granularity,
+            start,
+            end,
+            expected,
+            expected,
+            expected,
+            start,
+            end,
+            granularity,
+        ]
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql, params)
+            columns = [
+                "exchange",
+                "product_id",
+                "expected_count",
+                "actual_count",
+                "coverage_ratio",
+                "first_timestamp",
+                "last_timestamp",
+                "window_start",
+                "window_end",
+                "granularity",
+            ]
+            return pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        with duckdb.connect(self.db_path) as conn:
+            return conn.execute(sql, params).df()
+
+    def query_bag_common_support(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+    ) -> pd.DataFrame:
+        values_sql, bag_params = self._bag_values_sql_and_params(subscriptions)
+        bag_size = len(_dedupe_subscriptions(subscriptions))
+        sql = f"""
+            WITH bag(exchange, product_id) AS (
+                VALUES {values_sql}
+            )
+            SELECT
+                c.timestamp,
+                COUNT(DISTINCT c.exchange || ':' || c.product_id)::BIGINT AS present_pairs,
+                ?::BIGINT AS bag_pairs,
+                (COUNT(DISTINCT c.exchange || ':' || c.product_id)::BIGINT = ?::BIGINT) AS is_common,
+                ?::TIMESTAMP AS window_start,
+                ?::TIMESTAMP AS window_end,
+                ?::VARCHAR AS granularity
+            FROM candles AS c
+            INNER JOIN bag AS b
+                ON c.exchange = b.exchange
+               AND c.product_id = b.product_id
+            WHERE c.granularity = ?
+              AND c.timestamp >= ?
+              AND c.timestamp < ?
+            GROUP BY c.timestamp
+            ORDER BY c.timestamp
+        """
+        params: List = [
+            *bag_params,
+            bag_size,
+            bag_size,
+            start,
+            end,
+            granularity,
+            granularity,
+            start,
+            end,
+        ]
+        if _use_pool(self.db_path):
+            rows = _pool().execute(sql, params)
+            columns = [
+                "timestamp",
+                "present_pairs",
+                "bag_pairs",
+                "is_common",
+                "window_start",
+                "window_end",
+                "granularity",
+            ]
+            return pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+        with duckdb.connect(self.db_path) as conn:
+            return conn.execute(sql, params).df()
+
+    def query_bag_drawthrough(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+    ) -> Dict[str, pd.DataFrame]:
+        surface_df = self.query_bag_surface(
+            subscriptions,
+            start,
+            end,
+            granularity=granularity,
+        )
+        span_status_df = self.query_bag_span_status(
+            subscriptions,
+            start,
+            end,
+            granularity=granularity,
+        )
+        common_support_df = self.query_bag_common_support(
+            subscriptions,
+            start,
+            end,
+            granularity=granularity,
+        )
+
+        if not surface_df.empty:
+            surface_df = surface_df.copy()
+            surface_df["timestamp"] = pd.to_datetime(surface_df["timestamp"], errors="coerce")
+            surface_df = surface_df.dropna(subset=["timestamp"])
+        if not span_status_df.empty:
+            span_status_df = span_status_df.copy()
+            for column in ("first_timestamp", "last_timestamp", "window_start", "window_end"):
+                span_status_df[column] = pd.to_datetime(span_status_df[column], errors="coerce")
+        if not common_support_df.empty:
+            common_support_df = common_support_df.copy()
+            for column in ("timestamp", "window_start", "window_end"):
+                common_support_df[column] = pd.to_datetime(common_support_df[column], errors="coerce")
+
+        return {
+            "surface": surface_df,
+            "span_status": span_status_df,
+            "common_support": common_support_df,
+        }
+
     def _count_candles_in_range(
         self,
         product_id: str,
@@ -1370,13 +1689,7 @@ class CandleCache:
                 protocol_label=protocol_label,
             )
             if result == -1:
-                with self._concurrency_lock:
-                    self._concurrency = max(1, self._concurrency - 2)
-                    print(
-                        f"  [{protocol_label}][{exchange}][{product_id}] "
-                        f"429 hit — concurrency → {self._concurrency}, sleeping 15s"
-                    )
-                time.sleep(15)
+                self._note_rate_limit(exchange, product_id, protocol_label)
             else:
                 total += result
                 i += 1
@@ -1384,7 +1697,7 @@ class CandleCache:
         print(
             f"  [{protocol_label}][{exchange}][{product_id}] {total} candles saved, "
             f"{skipped}/{len(chunks)} chunks skipped (cached), "
-            f"window={aligned_start.isoformat()} -> {aligned_end.isoformat()}"
+            f"window={_utc_isoformat(aligned_start)} -> {_utc_isoformat(aligned_end)}"
         )
 
     def backfill_http(
@@ -1425,7 +1738,7 @@ class CandleCache:
 
         print(
             f"[HTTP backfill] {len(pairs)} pairs, "
-            f"{start.isoformat()} -> {end.isoformat()}, granularity={granularity}, "
+            f"{_utc_isoformat(start)} -> {_utc_isoformat(end)}, granularity={granularity}, "
             f"skip={skipped_pairs}, partial={partial_window_pairs}, full={full_window_pairs}"
         )
         if not plans:
@@ -1447,7 +1760,7 @@ class CandleCache:
         while remaining:
             with self._concurrency_lock:
                 workers = self._concurrency
-            batch = remaining[:workers * 2]
+            batch = remaining[:workers]
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = {pool.submit(fetch_one, plan): plan for plan in batch}
                 done: List[Tuple[str, datetime, datetime]] = []
@@ -1458,13 +1771,13 @@ class CandleCache:
                         done.append((pid, window_start, window_end))
                         print(
                             f"  ✓ [HTTP backfill][{exchange}][{pid}] "
-                            f"{window_start.isoformat()} -> {window_end.isoformat()} "
+                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)} "
                             f"({len(done)}/{len(batch)})"
                         )
                     except Exception as e:
                         print(
                             f"  ✗ [HTTP backfill][{exchange}][{pid}] "
-                            f"{window_start.isoformat()} -> {window_end.isoformat()}: {e}"
+                            f"{_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}: {e}"
                         )
                         done.append((pid, window_start, window_end))
             remaining = [plan for plan in remaining if plan not in done]
@@ -1646,7 +1959,7 @@ class CandleCache:
 
                 while not stop_event.is_set():
                     now = time.monotonic()
-                    if now - state["last_repair"] >= repair_every_seconds:
+                    if now - state["last_activity"] >= idle_restart_seconds:
                         self.repair_http_overlap(
                             pairs,
                             granularity=granularity,
@@ -1654,7 +1967,6 @@ class CandleCache:
                             exchange=exchange,
                         )
                         state["last_repair"] = now
-                    if now - state["last_activity"] >= idle_restart_seconds:
                         print("[WS live] idle timeout; restarting websocket after REST repair")
                         break
                     time.sleep(1.0)
@@ -1696,7 +2008,7 @@ class CandleCache:
         while remaining:
             with self._concurrency_lock:
                 workers = self._concurrency
-            batch = remaining[:workers * 2]
+            batch = remaining[:workers]
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = {pool.submit(fetch_one, pid): pid for pid in batch}
                 done = []
