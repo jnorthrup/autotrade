@@ -40,7 +40,7 @@ from graph_showdown import plan_walk_forward_split, run_walk_forward_validation
 
 import duckdb
 
-from pool_client import PoolClient, pool_is_running as _pool_is_running
+from pool_client import PoolClient, ensure_pool_running, pool_is_running as _pool_is_running
 
 # ---------------------------------------------------------------------------
 # Pool-routing helpers
@@ -266,7 +266,7 @@ class TrainingWorker:
                     "SELECT DISTINCT product_id FROM candles"
                 )
             else:
-                with duckdb.connect(str(DB_PATH)) as conn:
+                with duckdb.connect(str(DB_PATH), read_only=True) as conn:
                     rows = conn.execute("""
                         SELECT DISTINCT product_id FROM candles
                     """).fetchall()
@@ -303,7 +303,7 @@ class TrainingWorker:
                         [pair],
                     )
                 else:
-                    with duckdb.connect(str(db_path)) as conn:
+                    with duckdb.connect(str(db_path), read_only=True) as conn:
                         rows = conn.execute(f"""
                             SELECT close FROM candles
                             WHERE product_id = ?
@@ -470,7 +470,7 @@ class TrainingWorker:
                 "SELECT COUNT(DISTINCT timestamp) FROM candles"
             )[0][0]
         else:
-            with duckdb.connect(str(DB_PATH)) as conn:
+            with duckdb.connect(str(DB_PATH), read_only=True) as conn:
                 total_bars = conn.execute("""
                     SELECT COUNT(DISTINCT timestamp) FROM candles
                 """).fetchone()[0]
@@ -767,9 +767,11 @@ def main():
         choices=["auto", "cpu", "mps", "cuda"],
         help="Runtime device override"
     )
-    
+
     args = parser.parse_args()
-    
+
+    ensure_pool_running(str(Config.DB_PATH))
+
     worker = TrainingWorker(
         mode=args.mode,
         worker_id=args.worker_id or WORKER_ID,

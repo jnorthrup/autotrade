@@ -93,6 +93,8 @@ ane_hrm_train
 *.dia
 *.swiftdeps
 *.o
+target/
+*.bak
 
 # External dependencies
 external/
@@ -108,3 +110,4 @@ FINAL_*.md
 # Generated headers
 ane_matmul_*.h
 hrm_*.h
+mp-mini/

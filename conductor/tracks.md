@@ -74,7 +74,7 @@ DuckDB doesn't allow mixing connections with different configurations to the sam
 
 **Simple fix (applied):** Removed `read_only=True` from connections at lines 152 and 184. All connections now use the same default configuration.
 
-**Future enhancement (NOT pursued):** A singleton DuckDB connection pool server exists in `../literbike` (~/work/literbike) as `duckdb_pool` binary. This was NOT added to literbike to avoid cross-repo contamination. The pool server pattern can be revisited later if connection pooling becomes necessary at scale.
+**Future enhancement (implemented locally later):** A singleton DuckDB connection pool now lives in this repo as the `duckdb-pool` crate and `duckdb_pool` binary. The old cross-repo ownership claim was stale; the pool server pattern is local to autotrade.
 
 ### Changes made
 - **graph_showdown.py**: Removed `read_only=True` from `_list_all_binance_pairs()` and `_compute_volatility_filter()` DuckDB connections

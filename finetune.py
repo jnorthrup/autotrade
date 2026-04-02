@@ -27,7 +27,7 @@ from graph_showdown import plan_walk_forward_split, run_walk_forward_validation
 
 import duckdb
 
-from pool_client import PoolClient, pool_is_running as _pool_is_running
+from pool_client import PoolClient, ensure_pool_running, pool_is_running as _pool_is_running
 
 # ---------------------------------------------------------------------------
 # Pool-routing helpers
@@ -126,7 +126,7 @@ def _get_recent_time_window(
             except Exception:
                 pass
     else:
-        with duckdb.connect(db_path) as conn:
+        with duckdb.connect(db_path, read_only=True) as conn:
             for pair in pairs:
                 try:
                     row = conn.execute(
@@ -468,6 +468,8 @@ def main():
     )
     
     args = parser.parse_args()
+
+    ensure_pool_running(str(Config.DB_PATH))
     
     # Validate lookback range
     if args.lookback_days < DEFAULT_MIN_LOOKBACK_DAYS or args.lookback_days > DEFAULT_MAX_LOOKBACK_DAYS:

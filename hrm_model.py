@@ -494,11 +494,12 @@ class HRMEdgePredictor(nn.Module):
         """
         Grow layers by 4× using rotational expansion (NOT single layer addition).
 
-        Creates 3 additional rotated copies of each existing layer:
-        - 0°: original (preserved)
-        - 180°: rotated copy
-        - 90°: rotated copy
-        - 270°: rotated copy
+        Preserves the original stack as the first segment, then appends
+        three rotated stack copies underneath it:
+        - stack 0: original (preserved)
+        - stack 1: 180° rotated copy
+        - stack 2: 90° rotated copy
+        - stack 3: 270° rotated copy
 
         Args:
             level: 'H' or 'L' - which reasoning module to deepen
@@ -508,11 +509,11 @@ class HRMEdgePredictor(nn.Module):
 
         module = getattr(self, f'{level}_level')
         new_layers_list = []
+        source_layers = list(module.layers)
 
-        for layer in module.layers:
-            src_sd = layer.state_dict()
-
-            for rotation, rot_fn in [(0, None), (180, rotate_180), (90, rotate_90), (270, rotate_270)]:
+        for rotation in (0, 180, 90, 270):
+            for layer in source_layers:
+                src_sd = layer.state_dict()
                 new_layer = HRMBlock(self.hidden_size, self.num_heads, self.expansion)
                 if rotation == 0:
                     new_layer.load_state_dict(src_sd)

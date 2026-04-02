@@ -1,0 +1,16 @@
+[package]
+name = "duckdb-pool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+duckdb = "1.0"
+chrono = "0.4"
+base64 = "0.22"
+
+[[bin]]
+name = "duckdb_pool"
+path = "src/bin/duckdb_pool.rs"

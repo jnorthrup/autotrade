@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_training.sh - Launch HRM training loops in byobu with literbike pool
+# run_training.sh - Launch HRM training loops in byobu with the local DuckDB pool
 # Usage: ./run_training.sh        (start all)
 #        ./run_training.sh status  (show status)
 #        ./run_training.sh kill    (kill all)
@@ -9,7 +9,7 @@ set -e
 cd "$(dirname "$0")"
 
 SESSION="hrm-training"
-POOL_BIN="./literbike-pool/target/release/duckdb_pool"
+POOL_BIN="./duckdb-pool/target/release/duckdb_pool"
 DB_PATH="candles.duckdb"
 POOL_SOCKET="/tmp/duckdb_pool.sock"
 
@@ -22,7 +22,7 @@ case "${1:-start}" in
     # Create new detached session with pool window first
     byobu new-session -d -s "$SESSION" -n "pool"
 
-    # Window 0: literbike pool server (must start first, all others depend on it)
+    # Window 0: DuckDB pool server (must start first, all others depend on it)
     byobu send-keys -t "$SESSION:pool" \
       "$POOL_BIN $DB_PATH --socket $POOL_SOCKET 2>&1 | tee -a logs/pool.log" Enter
 
@@ -61,7 +61,7 @@ case "${1:-start}" in
       "while true; do python3 finetune.py --pretrained model_weights.pt --bag bag.json --lr 0.0001 --exchange coinbase --device mps --output model_weights_daytrade.pt; echo '[daytrade] cycle done, sleeping 30m'; sleep 1800; done" Enter
 
     echo "Started byobu session '$SESSION' with 5 windows:"
-    echo "  0:pool       - literbike duckdb_pool (singleton connection server)"
+    echo "  0:pool       - local duckdb_pool (singleton connection server)"
     echo "  1:pretrain   - training_worker --mode pretrain (stochastic bags)"
     echo "  2:finetune   - training_worker --mode finetune (fixed bag, coinbase)"
     echo "  3:showdown   - graph_showdown --autoresearch (model proving)"
