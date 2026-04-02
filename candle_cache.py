@@ -871,7 +871,18 @@ class CandleCache:
         delete_sql = f"DELETE FROM candles WHERE {where_sql}"
 
         if _use_pool(self.db_path):
-            raise RuntimeError("Timestamp normalization must run on direct DuckDB, not duckdb_pool")
+            rows = _pool().execute(count_sql, params)
+            affected = int(rows[0][0]) if rows and rows[0] else 0
+            if affected <= 0:
+                return 0
+            _pool().execute("DROP TABLE IF EXISTS candles_ts_normalized")
+            _pool().execute(temp_sql, params)
+            _pool().execute(delete_sql, params)
+            _pool().execute(
+                "INSERT OR REPLACE INTO candles SELECT * FROM candles_ts_normalized"
+            )
+            _pool().execute("DROP TABLE candles_ts_normalized")
+            return affected
 
         with _db_lock:
             with duckdb.connect(self.db_path) as conn:
