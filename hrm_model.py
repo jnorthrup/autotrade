@@ -979,30 +979,22 @@ class HierarchicalReasoningModel:
         matured_edges: List[Tuple[str, str]] = []
         fisheye_rows: List[List[float]] = []
         carry_rows: List[HRMEdgeCarry] = []
-        frac_targets: List[float] = []
-        ptt_targets: List[float] = []
-        stop_targets: List[float] = []
+        velocity_targets: List[float] = []
 
         for edge in actual_accels:
             frame = self._matured_prediction_frame(edge)
             if frame is None:
                 continue
-            ptt_target = 1.0 if hit_ptt.get(edge, False) else 0.0
-            stop_target = 1.0 if hit_stop.get(edge, False) else 0.0
 
-            if hit_ptt.get(edge, False):
-                frac_target = 1.0
-            elif hit_stop.get(edge, False):
-                frac_target = 0.0
+            if actual_velocities is not None and edge in actual_velocities:
+                vel = actual_velocities[edge]
             else:
-                frac_target = 0.5
+                vel = 0.0
 
             matured_edges.append(edge)
             fisheye_rows.append(frame['fisheye'])
             carry_rows.append(frame['carry'])
-            frac_targets.append(frac_target)
-            ptt_targets.append(ptt_target)
-            stop_targets.append(stop_target)
+            velocity_targets.append(vel)
 
         if not matured_edges:
             return None
@@ -1010,9 +1002,8 @@ class HierarchicalReasoningModel:
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
         base_idx_batch, quote_idx_batch = self._edge_index_batch(matured_edges)
         carry_batch = self._concat_carries(carry_rows)
-        frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
-        ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
-        stop_targets_tensor = torch.as_tensor(np.asarray(stop_targets, dtype=np.float32), device=self._device)
+        velocities_tensor = torch.as_tensor(np.asarray(velocity_targets, dtype=np.float32), device=self._device)
+
         if prep_start is not None:
             self._record_profile('update_prepare_seconds', time.perf_counter() - prep_start)
 
@@ -1025,10 +1016,15 @@ class HierarchicalReasoningModel:
             quote_idx_batch,
             carry_batch,
         )
-        frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
-        ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
-        stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
-        loss = frac_loss + ptt_loss + stop_loss
+        
+        allocations = pred_ptt - pred_stop
+        portfolio_pnl = torch.sum(allocations * velocities_tensor)
+        
+        leverage = torch.sum(torch.abs(allocations))
+        leverage_penalty = F.relu(leverage - 1.0) * 0.1
+        
+        loss = -portfolio_pnl + leverage_penalty
+        
         loss.backward()
         self._optimizer.step()
         self._sync_device_for_profile()
@@ -1067,31 +1063,22 @@ class HierarchicalReasoningModel:
         matured_edges: List[Tuple[str, str]] = []
         fisheye_rows: List[List[float]] = []
         carry_rows: List[HRMEdgeCarry] = []
-        frac_targets: List[float] = []
-        ptt_targets: List[float] = []
-        stop_targets: List[float] = []
+        velocity_targets: List[float] = []
 
         for edge in actual_accels:
             frame = self._matured_prediction_frame(edge)
             if frame is None:
                 continue
-
-            ptt_target = 1.0 if hit_ptt.get(edge, False) else 0.0
-            stop_target = 1.0 if hit_stop.get(edge, False) else 0.0
-
-            if hit_ptt.get(edge, False):
-                frac_target = 1.0
-            elif hit_stop.get(edge, False):
-                frac_target = 0.0
+            
+            if actual_velocities is not None and edge in actual_velocities:
+                vel = actual_velocities[edge]
             else:
-                frac_target = 0.5
+                vel = 0.0
 
             matured_edges.append(edge)
             fisheye_rows.append(frame['fisheye'])
             carry_rows.append(frame['carry'])
-            frac_targets.append(frac_target)
-            ptt_targets.append(ptt_target)
-            stop_targets.append(stop_target)
+            velocity_targets.append(vel)
 
         if not matured_edges:
             return None
@@ -1099,9 +1086,7 @@ class HierarchicalReasoningModel:
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
         base_idx_batch, quote_idx_batch = self._edge_index_batch(matured_edges)
         carry_batch = self._concat_carries(carry_rows)
-        frac_targets_tensor = torch.as_tensor(np.asarray(frac_targets, dtype=np.float32), device=self._device)
-        ptt_targets_tensor = torch.as_tensor(np.asarray(ptt_targets, dtype=np.float32), device=self._device)
-        stop_targets_tensor = torch.as_tensor(np.asarray(stop_targets, dtype=np.float32), device=self._device)
+        velocities_tensor = torch.as_tensor(np.asarray(velocity_targets, dtype=np.float32), device=self._device)
 
         with torch.no_grad():
             pred_frac, pred_ptt, pred_stop, _ = self._model(
@@ -1110,10 +1095,14 @@ class HierarchicalReasoningModel:
                 quote_idx_batch,
                 carry_batch,
             )
-            frac_loss = F.binary_cross_entropy(pred_frac, frac_targets_tensor)
-            ptt_loss = F.binary_cross_entropy(pred_ptt, ptt_targets_tensor)
-            stop_loss = F.binary_cross_entropy(pred_stop, stop_targets_tensor)
-            loss = frac_loss + ptt_loss + stop_loss
+            
+            allocations = pred_ptt - pred_stop
+            portfolio_pnl = torch.sum(allocations * velocities_tensor)
+            
+            leverage = torch.sum(torch.abs(allocations))
+            leverage_penalty = F.relu(leverage - 1.0) * 0.1
+            
+            loss = -portfolio_pnl + leverage_penalty
 
         for edge in matured_edges:
             self._prediction_queue[edge].pop(0)

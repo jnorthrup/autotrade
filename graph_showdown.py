@@ -758,6 +758,7 @@ def run_walk_forward_validation(
             eval_graph,
             edge_accels,
             bar_idx,
+            actual_velocities=edge_velocities,
             hit_ptt=hit_ptt,
             hit_stop=hit_stop,
         )
@@ -850,7 +851,7 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
             active_predictions[bar_idx] = preds
         
         if model.ready_for_update(bar_idx, edge_accels):
-            loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
+            loss = model.update(graph, edge_accels, bar_idx, actual_velocities=edge_velocities, hit_ptt=hit_ptt, hit_stop=hit_stop)
             if loss is not None:
                 total_loss += loss
                 n_updates += 1
