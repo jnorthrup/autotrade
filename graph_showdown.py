@@ -734,7 +734,16 @@ def run_walk_forward_validation(
 
         eval_model.update_prices(eval_graph, bar_idx)
         if eval_model.ready_for_prediction(bar_idx):
-            eval_model.predict(eval_graph, bar_idx)
+            preds = eval_model.predict(eval_graph, bar_idx)
+            if bar_idx == end_bar - 1 and preds:
+                ts_str = str(eval_graph.common_timestamps[bar_idx])
+                signals = []
+                for edge, (frac, ptt, stop) in preds.items():
+                    if ptt > 0.55 or stop > 0.55:
+                        signals.append(f"{edge[0]}-{edge[1]} B={ptt:.2f} S={stop:.2f}")
+                if signals:
+                    print(f"  [PaperTrade @ {ts_str}] " + " | ".join(signals[:6]) + (f" (+{len(signals)-6} more)" if len(signals) > 6 else ""))
+
 
         if not eval_model.ready_for_update(bar_idx, edge_accels):
             continue
@@ -815,12 +824,12 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
                 n_updates += 1
                 loss_history.append(loss)
         
-        if i % print_every == 0 and i > 0:
+        if (i % print_every == 0 and i > 0) or (i == len(sorted_bars) - 1):
             if n_updates > 0:
                 avg_loss = total_loss / n_updates
-                print(f"Bar {bar_idx}: avg_loss={avg_loss:.6f}, n_updates={n_updates}")
+                print(f"Train[{i+1}/{len(sorted_bars)}] Bar {bar_idx}: avg_loss={avg_loss:.6f}, updates={n_updates}")
             else:
-                print(f"Bar {bar_idx}: warmup, candle history/prediction queues not full yet")
+                print(f"Train[{i+1}/{len(sorted_bars)}] Bar {bar_idx}: warmup, candle history queues filling ({i+1}/{model.y_depth})")
 
     if profile_stats is not None:
         profile_stats.clear()
