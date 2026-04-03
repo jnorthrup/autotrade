@@ -727,14 +727,20 @@ def run_walk_forward_validation(
 
     total_loss = 0.0
     n_updates = 0
+    active_predictions = {}
+    total_pnl = 0.0
+    max_pnl = 0.0
+    max_drawdown = 0.0
+
     for bar_idx in range(warmup_start_bar, end_bar):
-        edge_accels, _, hit_ptt, hit_stop = eval_graph.update(bar_idx)
+        edge_accels, edge_velocities, hit_ptt, hit_stop = eval_graph.update(bar_idx)
         if not edge_accels:
             continue
 
         eval_model.update_prices(eval_graph, bar_idx)
         if eval_model.ready_for_prediction(bar_idx):
             preds = eval_model.predict(eval_graph, bar_idx)
+            active_predictions[bar_idx] = preds
             if bar_idx == end_bar - 1 and preds:
                 ts_str = str(eval_graph.common_timestamps[bar_idx])
                 signals = []
@@ -755,6 +761,26 @@ def run_walk_forward_validation(
             hit_ptt=hit_ptt,
             hit_stop=hit_stop,
         )
+
+        mature_idx = bar_idx - eval_model.prediction_depth
+        if mature_idx in active_predictions:
+            matured_preds = active_predictions.pop(mature_idx)
+            bar_pnl = 0.0
+            for edge, (frac, ptt, stop) in matured_preds.items():
+                if edge not in edge_velocities:
+                    continue
+                vel = edge_velocities[edge]
+                if ptt > 0.55:
+                    bar_pnl += vel - eval_graph.fee_rate
+                elif stop > 0.55:
+                    bar_pnl += -vel - eval_graph.fee_rate
+            total_pnl += bar_pnl
+            if total_pnl > max_pnl:
+                max_pnl = total_pnl
+            dd = max_pnl - total_pnl
+            if dd > max_drawdown:
+                max_drawdown = dd
+
         if loss is None or bar_idx < validation_start_bar:
             continue
 
@@ -764,7 +790,7 @@ def run_walk_forward_validation(
             avg_loss = total_loss / n_updates
             print(
                 f"[WalkForward] bar={bar_idx} avg_loss={avg_loss:.6f} "
-                f"updates={n_updates}"
+                f"updates={n_updates} pnl={total_pnl:.5f} max_dd={max_drawdown:.5f}"
             )
 
     if n_updates <= 0:
@@ -796,6 +822,11 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
     early_stopped = False
     graph_update_seconds = 0.0
     
+    active_predictions = {}
+    total_pnl = 0.0
+    max_pnl = 0.0
+    max_drawdown = 0.0
+
     sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
     print(f"Training on {len(sorted_bars)} bars with data")
     
@@ -815,7 +846,8 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
         model.update_prices(graph, bar_idx)
         
         if model.ready_for_prediction(bar_idx):
-            model.predict(graph, bar_idx)
+            preds = model.predict(graph, bar_idx)
+            active_predictions[bar_idx] = preds
         
         if model.ready_for_update(bar_idx, edge_accels):
             loss = model.update(graph, edge_accels, bar_idx, hit_ptt=hit_ptt, hit_stop=hit_stop)
@@ -824,10 +856,29 @@ def run_training(graph: CoinGraph, model: HierarchicalReasoningModel, start_bar:
                 n_updates += 1
                 loss_history.append(loss)
         
+        mature_idx = bar_idx - model.prediction_depth
+        if mature_idx in active_predictions:
+            matured_preds = active_predictions.pop(mature_idx)
+            bar_pnl = 0.0
+            for edge, (frac, ptt, stop) in matured_preds.items():
+                if edge not in edge_velocities:
+                    continue
+                vel = edge_velocities[edge]
+                if ptt > 0.55:
+                    bar_pnl += vel - graph.fee_rate
+                elif stop > 0.55:
+                    bar_pnl += -vel - graph.fee_rate
+            total_pnl += bar_pnl
+            if total_pnl > max_pnl:
+                max_pnl = total_pnl
+            dd = max_pnl - total_pnl
+            if dd > max_drawdown:
+                max_drawdown = dd
+
         if (i % print_every == 0 and i > 0) or (i == len(sorted_bars) - 1):
             if n_updates > 0:
                 avg_loss = total_loss / n_updates
-                print(f"Train[{i+1}/{len(sorted_bars)}] Bar {bar_idx}: avg_loss={avg_loss:.6f}, updates={n_updates}")
+                print(f"Train[{i+1}/{len(sorted_bars)}] Bar {bar_idx}: avg_loss={avg_loss:.6f}, updates={n_updates}, pnl={total_pnl:.5f}, max_dd={max_drawdown:.5f}")
             else:
                 print(f"Train[{i+1}/{len(sorted_bars)}] Bar {bar_idx}: warmup, candle history queues filling ({i+1}/{model.y_depth})")
 
