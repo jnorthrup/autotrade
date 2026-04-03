@@ -1769,6 +1769,49 @@ class CandleCache:
             df[column] = pd.to_datetime(df[column], errors="coerce")
         return df
 
+    def bag_coverage_ratio(
+        self,
+        subscriptions: List[Dict[str, str]],
+        start: datetime,
+        end: datetime,
+        granularity: str = "300",
+    ) -> float:
+        """Fast coverage check: returns actual/expected ratio (0.0-1.0)."""
+        deduped = _dedupe_subscriptions(subscriptions)
+        if not deduped:
+            return 1.0
+        window_start = _floor_time_to_granularity(start, granularity)
+        window_end = _floor_time_to_granularity(end, granularity)
+        if window_start >= window_end:
+            return 1.0
+        gran_sec = int(granularity)
+        expected_slots = int((window_end - window_start).total_seconds() // gran_sec)
+        expected_total = expected_slots * len(deduped)
+        if expected_total <= 0:
+            return 1.0
+
+        pair_filters = " OR ".join(
+            f"(exchange = '{sub['exchange']}' AND product_id = '{sub['product_id']}')"
+            for sub in deduped
+        )
+        sql = (
+            f"SELECT COUNT(*) FROM candles "
+            f"WHERE ({pair_filters}) "
+            f"AND granularity = '{granularity}' "
+            f"AND timestamp >= '{_utc_isoformat(window_start)}' "
+            f"AND timestamp < '{_utc_isoformat(window_end)}'"
+        )
+        try:
+            if _use_pool(self.db_path):
+                rows = _pool().execute(sql)
+                actual = int(rows[0][0]) if rows else 0
+            else:
+                with duckdb.connect(self.db_path) as conn:
+                    actual = int(conn.execute(sql).fetchone()[0])
+        except Exception:
+            return 0.0
+        return min(1.0, actual / expected_total)
+
     def repair_bag_drawthrough(
         self,
         subscriptions: List[Dict[str, str]],
@@ -1797,6 +1840,21 @@ class CandleCache:
                 "passes": 0,
                 "remaining_fragments": 0,
                 "remaining_missing_bars": 0,
+            }
+
+        # Fast coverage gate: skip expensive gap analysis when DB is already saturated
+        coverage = self.bag_coverage_ratio(deduped, window_start, window_end, granularity)
+        if coverage >= 0.95:
+            print(
+                f"{log_prefix} {label} skip (coverage={coverage:.1%}) "
+                f"window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+            )
+            return {
+                "status": "skip_high_coverage",
+                "passes": 0,
+                "remaining_fragments": 0,
+                "remaining_missing_bars": 0,
+                "coverage": coverage,
             }
 
         def fragment_signature(df: pd.DataFrame) -> Tuple[Tuple[str, str, int, int, int], ...]:
@@ -2654,14 +2712,15 @@ class CandleCache:
         gran_sec = int(granularity)
         repair_end = _floor_time_to_granularity(end or _utc_now_naive(), granularity)
         repair_start = repair_end - timedelta(seconds=gran_sec * max(overlap_candles, 1))
-        self.repair_bag_drawthrough(
-            [{"exchange": exchange, "product_id": pid} for pid in pairs],
-            repair_start,
-            repair_end,
-            granularity=granularity,
-            max_passes=2,
-            log_prefix="[HTTP repair]",
-            label="tail",
+        plans = [
+            (pid, repair_start, repair_end)
+            for pid in pairs
+        ]
+        self.backfill_http_exact(
+            plans,
+            granularity,
+            exchange=exchange,
+            protocol_label="HTTP repair/tail",
         )
 
     def ws_snapshot(

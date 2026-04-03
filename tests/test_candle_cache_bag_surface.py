@@ -129,7 +129,9 @@ def test_repair_http_overlap_forces_overlap_fetch(tmp_path, monkeypatch):
     )
 
     assert len(calls) == 1
-    assert calls[0]["force"] is True
+    # repair_http_overlap now uses backfill_http_exact (direct targeted fetch)
+    assert calls[0]["product_id"] == "BTC-USD"
+    assert calls[0]["exchange"] == "coinbase"
 
 
 def test_coin_graph_load_uses_verified_bag_surface(tmp_path, monkeypatch):

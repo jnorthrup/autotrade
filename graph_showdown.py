@@ -1540,31 +1540,42 @@ def run_coinbase_week_http_then_live(
         f"granularity={granularity} device={device}"
     )
 
+    bootstrap_coverage = cache.bag_coverage_ratio(
+        selected_subscriptions, initial_start, initial_end, granularity=granularity,
+    )
+    print(f"[Coinbase week/live] DB coverage={bootstrap_coverage:.1%} for {len(selected_subscriptions)} pairs")
+
     for exchange, subs in sorted(selected_by_exchange.items()):
         pairs = [sub["product_id"] for sub in subs]
         if exchange != "coinbase":
             raise NotImplementedError(f"Unsupported exchange in bag: {exchange}")
 
-        print(
-            f"[Coinbase week/live] ws snapshot seed "
-            f"pairs={len(pairs)} target_bars={WS_SNAPSHOT_TARGET_CANDLES}"
-        )
-        cache.ws_snapshot(
-            pairs,
-            granularity=granularity,
-            exchange=exchange,
-            target_candles=WS_SNAPSHOT_TARGET_CANDLES,
-        )
+        if bootstrap_coverage < 0.95:
+            print(
+                f"[Coinbase week/live] ws snapshot seed "
+                f"pairs={len(pairs)} target_bars={WS_SNAPSHOT_TARGET_CANDLES}"
+            )
+            cache.ws_snapshot(
+                pairs,
+                granularity=granularity,
+                exchange=exchange,
+                target_candles=WS_SNAPSHOT_TARGET_CANDLES,
+            )
 
-        _drawthrough_repair_window(
-            cache,
-            subs,
-            exchange=exchange,
-            start=initial_start,
-            end=initial_end,
-            granularity=granularity,
-            label="drawthrough",
-        )
+            _drawthrough_repair_window(
+                cache,
+                subs,
+                exchange=exchange,
+                start=initial_start,
+                end=initial_end,
+                granularity=granularity,
+                label="drawthrough",
+            )
+        else:
+            print(
+                f"[Coinbase week/live] bootstrap skip (coverage={bootstrap_coverage:.1%}) "
+                f"ws_snapshot and drawthrough not needed"
+            )
 
     graph = _load_selected_pair_graph(
         selected_subscriptions,
