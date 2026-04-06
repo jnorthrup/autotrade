@@ -305,6 +305,11 @@ class HRMEdgePredictor(nn.Module):
         else: self.L_cycles *= 4
 
 def fisheye_boundaries(y_depth: int, x_pixels: int, curvature: float) -> List[int]:
+    """Build candle-close compression buckets over the trailing `y_depth` closes.
+
+    The fisheye is a close-history compressor: it emphasizes the most recent
+    candle closes while still keeping older structure in coarser buckets.
+    """
     if x_pixels <= 1: return [y_depth]
     boundaries, prev =[], 0
     for i in range(x_pixels):
@@ -476,7 +481,7 @@ class HierarchicalReasoningModel:
             self._prediction_queue[e].append({'fisheye': fisheye_rows[idx], 'bar_idx': bar_idx, 'observation_count': self._edge_observation_count[e], 'carry': HRMEdgeCarry(z_H=input_carry.z_H[idx:idx+1].detach().clone(), z_L=input_carry.z_L[idx:idx+1].detach().clone()), 'start_price': self._close_buffer[e][-1] if self._close_buffer.get(e) else 1.0})
         return predictions
 
-    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1, actual_velocities=None, hit_ptt=None, hit_stop=None) -> Optional[float]:
+    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1, actual_velocities=None, hit_ptt=None, hit_stop=None, loss_multiplier: float = 1.0) -> Optional[float]:
         if not self.edge_names or self._model is None or self._optimizer is None or hit_ptt is None or hit_stop is None or (bar_idx >= 0 and self._last_price_bar_idx != bar_idx): return None
         prep_start = time.perf_counter() if self._profile_enabled else None
         matured_edges, fisheye_rows, carry_rows, velocity_targets = [], [], [],[]
@@ -493,10 +498,49 @@ class HierarchicalReasoningModel:
         self._optimizer.zero_grad(set_to_none=True)
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
-        _, pred_ptt, pred_stop, _ = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, carry_batch)
+        # Capture the fraction head as well so the model can learn spend budgets
+        pred_fraction, pred_ptt, pred_stop, _ = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, carry_batch)
         allocations = pred_ptt - pred_stop
-        loss = -(torch.sum(allocations * velocities_tensor) * 100.0) + F.relu(torch.sum(torch.abs(allocations)) - 1.0) * 10.0 + F.relu(0.5 - torch.sum(torch.abs(allocations))) * 5.0
-        loss.backward(); self._optimizer.step()
+
+        # 1) Directional Certainty Loss (prevents "skating on hopium")
+        target_dir = (velocities_tensor > 0).float()
+        dir_loss = F.binary_cross_entropy(pred_ptt, target_dir) + F.binary_cross_entropy(pred_stop, 1.0 - target_dir)
+
+        # 2) Volatility Calibration (the Hilo body should reflect realized volatility)
+        pred_vol = pred_ptt + pred_stop
+        realized_vol = torch.clamp(torch.abs(velocities_tensor) * 200.0, 0.0, 1.0)
+        vol_loss = F.mse_loss(pred_vol, realized_vol)
+
+        # 3) PnL Surrogate (log-style to reward consistent winners)
+        pnl_gain = torch.log1p(torch.abs(allocations * velocities_tensor))
+        pnl_loss = -torch.mean(torch.sign(allocations * velocities_tensor) * pnl_gain)
+
+        # 4) Budget / regularization penalties (keep allocation magnitudes sensible)
+        budget_penalty = F.relu(torch.sum(torch.abs(allocations)) - 1.0) * 10.0
+
+        # Total loss (weight directionality early to "wake up" the model)
+        loss = (dir_loss * 2.0) + (vol_loss * 1.0) + (pnl_loss * 100.0) + budget_penalty
+
+        # Optional small encouragement for the fraction head (stable fallback)
+        try:
+            loss = loss - torch.sum(pred_fraction * (velocities_tensor > 0).float()) * 1.0
+        except Exception:
+            pass
+
+        # Apply external multiplier (e.g., amplify learning on parking/augmentation events)
+        try:
+            if loss_multiplier is None:
+                loss_multiplier = 1.0
+            if float(loss_multiplier) != 1.0:
+                loss = loss * float(loss_multiplier)
+        except Exception:
+            # If anything goes wrong with multiplier handling, fall back silently
+            pass
+
+        loss.backward()
+        # Gradient clipping to avoid exploding updates on high-hopium bars
+        torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+        self._optimizer.step()
         self._sync_device_for_profile()
         if fwd_start: self._record_profile('update_forward_backward_seconds', time.perf_counter() - fwd_start)
         self._record_profile('update_batches', 1.0); self._record_profile('update_edges', float(len(matured_edges)))

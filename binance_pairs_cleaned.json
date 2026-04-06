@@ -1,0 +1,10109 @@
+[
+  {
+    "symbol": "1INCHBUSD",
+    "base": "1INCH",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "1INCHDOWNUSDT",
+    "base": "1INCHDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "1INCHUPUSDT",
+    "base": "1INCHU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "1INCHUSDT",
+    "base": "1INCH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AAVEBNB",
+    "base": "AAVE",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AAVEBTC",
+    "base": "AAV",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AAVEBUSD",
+    "base": "AAV",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AAVEDOWNUSDT",
+    "base": "AAVEDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "AAVEETH",
+    "base": "AAVE",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AAVEUPUSDT",
+    "base": "AAVEU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "AAVEUSDT",
+    "base": "AAV",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ACMBTC",
+    "base": "AC",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ACMBUSD",
+    "base": "AC",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ACMUSDT",
+    "base": "AC",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADAAUD",
+    "base": "ADA",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADABNB",
+    "base": "AD",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADABRL",
+    "base": "ADA",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADABTC",
+    "base": "AD",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADABUSD",
+    "base": "AD",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADADOWNUSDT",
+    "base": "ADADO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "ADAETH",
+    "base": "ADA",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADAEUR",
+    "base": "ADA",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADAGBP",
+    "base": "ADA",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADARUB",
+    "base": "ADA",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADATRY",
+    "base": "ADA",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADATUSD",
+    "base": "ADA",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADAUPUSDT",
+    "base": "ADAU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "ADAUSDC",
+    "base": "ADA",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADAUSDT",
+    "base": "AD",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADXBTC",
+    "base": "AD",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ADXETH",
+    "base": "AD",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AERGOBTC",
+    "base": "AERG",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AERGOBUSD",
+    "base": "AERG",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AGIBTC",
+    "base": "AG",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AGIXBTC",
+    "base": "AGI",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AIONBTC",
+    "base": "AIO",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AIONETH",
+    "base": "AION",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AIONUSDT",
+    "base": "AIO",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AKROBTC",
+    "base": "AKR",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AKROUSDT",
+    "base": "AKR",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALGOBNB",
+    "base": "ALGO",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALGOBTC",
+    "base": "ALG",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALGOBUSD",
+    "base": "ALG",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALGOTUSD",
+    "base": "ALGO",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALGOUSDT",
+    "base": "ALG",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALICEBTC",
+    "base": "ALIC",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALICEBUSD",
+    "base": "ALIC",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALICEUSDT",
+    "base": "ALIC",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALPHABNB",
+    "base": "ALPH",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALPHABTC",
+    "base": "ALPH",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALPHABUSD",
+    "base": "ALPH",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ALPHAUSDT",
+    "base": "ALPH",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AMBBTC",
+    "base": "AMB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANKRBNB",
+    "base": "ANK",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANKRBTC",
+    "base": "ANK",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANKRUSDT",
+    "base": "ANK",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANTBNB",
+    "base": "AN",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANTBTC",
+    "base": "A",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANTBUSD",
+    "base": "AN",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ANTUSDT",
+    "base": "AN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "APPCBTC",
+    "base": "APP",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARBNB",
+    "base": "A",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARBTC",
+    "base": "A",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARBUSD",
+    "base": "A",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARDRBTC",
+    "base": "ARD",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARDRUSDT",
+    "base": "ARD",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARKBTC",
+    "base": "AR",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARPABNB",
+    "base": "ARP",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARPABTC",
+    "base": "ARP",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARPAUSDT",
+    "base": "ARP",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ARUSDT",
+    "base": "A",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ASRBTC",
+    "base": "AS",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ASRUSDT",
+    "base": "AS",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ASTBTC",
+    "base": "AS",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATMBTC",
+    "base": "AT",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATMBUSD",
+    "base": "AT",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATMUSDT",
+    "base": "AT",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATOMBNB",
+    "base": "ATO",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATOMBTC",
+    "base": "ATO",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATOMBUSD",
+    "base": "ATO",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATOMUSDC",
+    "base": "ATOM",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ATOMUSDT",
+    "base": "ATO",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUCTIONBTC",
+    "base": "AUCTIO",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUCTIONBUSD",
+    "base": "AUCTION",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUDBUSD",
+    "base": "AUD",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUDIOBTC",
+    "base": "AUDI",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUDIOBUSD",
+    "base": "AUDI",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUDIOUSDT",
+    "base": "AUDI",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUDUSDT",
+    "base": "AU",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUTOBTC",
+    "base": "AUT",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUTOBUSD",
+    "base": "AUT",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AUTOUSDT",
+    "base": "AUT",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVABNB",
+    "base": "AV",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVABTC",
+    "base": "AV",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVABUSD",
+    "base": "AV",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAUSDT",
+    "base": "AV",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXBNB",
+    "base": "AVA",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXBTC",
+    "base": "AVA",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXBUSD",
+    "base": "AVA",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXEUR",
+    "base": "AVAX",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXTRY",
+    "base": "AVAX",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AVAXUSDT",
+    "base": "AVA",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AXSBNB",
+    "base": "AXS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AXSBTC",
+    "base": "AX",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AXSBUSD",
+    "base": "AX",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "AXSUSDT",
+    "base": "AX",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BADGERBTC",
+    "base": "BADGE",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BADGERBUSD",
+    "base": "BADGE",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BADGERUSDT",
+    "base": "BADGE",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BAKEBNB",
+    "base": "BAKE",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BAKEBUSD",
+    "base": "BAK",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BAKEUSDT",
+    "base": "BAK",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BALBTC",
+    "base": "BA",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BALBUSD",
+    "base": "BAL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BALUSDT",
+    "base": "BA",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BANDBNB",
+    "base": "BAND",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BANDBTC",
+    "base": "BAN",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BANDBUSD",
+    "base": "BAND",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BANDUSDT",
+    "base": "BAN",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BARBTC",
+    "base": "BA",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BARBUSD",
+    "base": "BA",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BARUSDT",
+    "base": "BA",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATBNB",
+    "base": "BA",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATBTC",
+    "base": "BA",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATBUSD",
+    "base": "BA",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATETH",
+    "base": "BA",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATUSDC",
+    "base": "BAT",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BATUSDT",
+    "base": "BA",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCDBTC",
+    "base": "BC",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHABUSD",
+    "base": "BCH",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHBNB",
+    "base": "BCH",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHBTC",
+    "base": "BCH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHBUSD",
+    "base": "BCH",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHDOWNUSDT",
+    "base": "BCHDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BCHEUR",
+    "base": "BCH",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHPAX",
+    "base": "B",
+    "quote": "CHPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHTUSD",
+    "base": "BCH",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHUPUSDT",
+    "base": "BCHU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BCHUSDC",
+    "base": "BCH",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BCHUSDT",
+    "base": "BCH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BEAMBTC",
+    "base": "BEA",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BEAMUSDT",
+    "base": "BEA",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BELBNB",
+    "base": "BEL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BELBTC",
+    "base": "BE",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BELBUSD",
+    "base": "BEL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BELUSDT",
+    "base": "BE",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BETHETH",
+    "base": "BETH",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BIFIBNB",
+    "base": "BIF",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BIFIBUSD",
+    "base": "BIFI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BLZBNB",
+    "base": "BLZ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BLZBTC",
+    "base": "BLZ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BLZETH",
+    "base": "BLZ",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BLZUSDT",
+    "base": "BLZ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBAUD",
+    "base": "BNB",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBBIDR",
+    "base": "BNB",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBBRL",
+    "base": "BNB",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBBTC",
+    "base": "BNB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBBUSD",
+    "base": "BNB",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBDAI",
+    "base": "B",
+    "quote": "NBDAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBDOWNUSDT",
+    "base": "BNBDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BNBETH",
+    "base": "BNB",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBEUR",
+    "base": "BNB",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBGBP",
+    "base": "BNB",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBIDRT",
+    "base": "B",
+    "quote": "NBIDRT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBPAX",
+    "base": "B",
+    "quote": "NBPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBRUB",
+    "base": "BNB",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBTRY",
+    "base": "BNB",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBTUSD",
+    "base": "BNB",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBUAH",
+    "base": "B",
+    "quote": "NBUAH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBUPUSDT",
+    "base": "BNBU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BNBUSDC",
+    "base": "BNB",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBUSDT",
+    "base": "BNB",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNBZAR",
+    "base": "B",
+    "quote": "NBZAR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNTBTC",
+    "base": "B",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNTBUSD",
+    "base": "BN",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNTETH",
+    "base": "BN",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BNTUSDT",
+    "base": "BN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BQXBTC",
+    "base": "BQ",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BQXETH",
+    "base": "BQ",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BRDBTC",
+    "base": "BR",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BRDETH",
+    "base": "BRD",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCAUD",
+    "base": "BTC",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCBIDR",
+    "base": "BTC",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCBRL",
+    "base": "BTC",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCBUSD",
+    "base": "BT",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCDAI",
+    "base": "B",
+    "quote": "TCDAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCDOWNUSDT",
+    "base": "BTCDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BTCEUR",
+    "base": "BTC",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCGBP",
+    "base": "BTC",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCGYEN",
+    "base": "B",
+    "quote": "TCGYEN",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCIDRT",
+    "base": "B",
+    "quote": "TCIDRT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCNGN",
+    "base": "B",
+    "quote": "TCNGN",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCPAX",
+    "base": "B",
+    "quote": "TCPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCRUB",
+    "base": "BTC",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCSTBTC",
+    "base": "BTCS",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCSTBUSD",
+    "base": "BTCS",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCSTUSDT",
+    "base": "BTCS",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCTRY",
+    "base": "BTC",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCTUSD",
+    "base": "BTC",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCUAH",
+    "base": "B",
+    "quote": "TCUAH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCUPUSDT",
+    "base": "BTCU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "BTCUSDC",
+    "base": "BTC",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCUSDT",
+    "base": "BT",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCVAI",
+    "base": "B",
+    "quote": "TCVAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTCZAR",
+    "base": "B",
+    "quote": "TCZAR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTGBTC",
+    "base": "BT",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTGBUSD",
+    "base": "BTG",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTGUSDT",
+    "base": "BT",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTSBTC",
+    "base": "BT",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTSUSDT",
+    "base": "BT",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTBNB",
+    "base": "BT",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTBRL",
+    "base": "BTT",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTBUSD",
+    "base": "BT",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTEUR",
+    "base": "BTT",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTTRX",
+    "base": "B",
+    "quote": "TTTRX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTTRY",
+    "base": "BTT",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTTUSD",
+    "base": "BTT",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTUSDC",
+    "base": "BTT",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BTTUSDT",
+    "base": "BT",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BURGERBNB",
+    "base": "BURGE",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BURGERBUSD",
+    "base": "BURGE",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BURGERUSDT",
+    "base": "BURGE",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDBIDR",
+    "base": "BUSD",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDBRL",
+    "base": "BUSD",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDBVND",
+    "base": "BU",
+    "quote": "SDBVND",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDDAI",
+    "base": "B",
+    "quote": "USDDAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDRUB",
+    "base": "BUSD",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDTRY",
+    "base": "BUSD",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDUSDT",
+    "base": "BUS",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDVAI",
+    "base": "B",
+    "quote": "USDVAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BUSDZAR",
+    "base": "B",
+    "quote": "USDZAR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BZRXBTC",
+    "base": "BZR",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BZRXBUSD",
+    "base": "BZR",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "BZRXUSDT",
+    "base": "BZR",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CAKEBNB",
+    "base": "CAKE",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CAKEBTC",
+    "base": "CAK",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CAKEBUSD",
+    "base": "CAK",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CAKEGBP",
+    "base": "CAKE",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CAKEUSDT",
+    "base": "CAK",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CDTBTC",
+    "base": "CD",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CDTETH",
+    "base": "CD",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELOBTC",
+    "base": "CEL",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELOUSDT",
+    "base": "CEL",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELRBNB",
+    "base": "CEL",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELRBTC",
+    "base": "CEL",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELRBUSD",
+    "base": "CEL",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CELRUSDT",
+    "base": "CEL",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CFXBTC",
+    "base": "CF",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CFXBUSD",
+    "base": "CF",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CFXUSDT",
+    "base": "CF",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHRBNB",
+    "base": "CH",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHRBTC",
+    "base": "CH",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHRUSDT",
+    "base": "CH",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZBNB",
+    "base": "CHZ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZBRL",
+    "base": "CHZ",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZBTC",
+    "base": "CHZ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZBUSD",
+    "base": "CHZ",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZEUR",
+    "base": "CHZ",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZGBP",
+    "base": "CHZ",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZTRY",
+    "base": "CHZ",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CHZUSDT",
+    "base": "CHZ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CKBBTC",
+    "base": "CKB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CKBBUSD",
+    "base": "CKB",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CKBUSDT",
+    "base": "CKB",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CNDBTC",
+    "base": "CN",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COCOSBNB",
+    "base": "COCOS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COCOSUSDT",
+    "base": "COCO",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COMPBTC",
+    "base": "COM",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COMPBUSD",
+    "base": "COM",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COMPUSDT",
+    "base": "COM",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COSBNB",
+    "base": "COS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COSBTC",
+    "base": "CO",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COSUSDT",
+    "base": "CO",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COTIBNB",
+    "base": "COT",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COTIBTC",
+    "base": "COT",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COTIUSDT",
+    "base": "COTI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COVERBUSD",
+    "base": "COVE",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "COVERETH",
+    "base": "COVER",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CREAMBNB",
+    "base": "CREA",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CREAMBUSD",
+    "base": "CREA",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CRVBNB",
+    "base": "CRV",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CRVBTC",
+    "base": "CRV",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CRVBUSD",
+    "base": "CRV",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CRVUSDT",
+    "base": "CRV",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTKBNB",
+    "base": "CTK",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTKBTC",
+    "base": "CT",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTKBUSD",
+    "base": "CTK",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTKUSDT",
+    "base": "CTK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTSIBNB",
+    "base": "CTS",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTSIBTC",
+    "base": "CTS",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTSIBUSD",
+    "base": "CTSI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTSIUSDT",
+    "base": "CTSI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTXCBTC",
+    "base": "CTX",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CTXCUSDT",
+    "base": "CTX",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CVCBTC",
+    "base": "CV",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CVCETH",
+    "base": "CV",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CVCUSDT",
+    "base": "CV",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CVPBUSD",
+    "base": "CV",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "CVPETH",
+    "base": "CVP",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DASHBNB",
+    "base": "DASH",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DASHBTC",
+    "base": "DASH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DASHBUSD",
+    "base": "DASH",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DASHETH",
+    "base": "DASH",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DASHUSDT",
+    "base": "DASH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DATABTC",
+    "base": "DAT",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DATABUSD",
+    "base": "DAT",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DATAETH",
+    "base": "DATA",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DATAUSDT",
+    "base": "DAT",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DCRBTC",
+    "base": "DC",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DCRUSDT",
+    "base": "DC",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DEGOBTC",
+    "base": "DEG",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DEGOBUSD",
+    "base": "DEG",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DEGOUSDT",
+    "base": "DEG",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DENTETH",
+    "base": "DEN",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DENTUSDT",
+    "base": "DEN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DEXEBUSD",
+    "base": "DEX",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DEXEETH",
+    "base": "DEXE",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DFBUSD",
+    "base": "DF",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DFETH",
+    "base": "DF",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DGBBNB",
+    "base": "DGB",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DGBBTC",
+    "base": "DGB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DGBBUSD",
+    "base": "DGB",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DGBUSDT",
+    "base": "DGB",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DIABNB",
+    "base": "DI",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DIABTC",
+    "base": "DI",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DIABUSD",
+    "base": "DI",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DIAUSDT",
+    "base": "DI",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DLTBTC",
+    "base": "DL",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DNTBTC",
+    "base": "D",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DNTBUSD",
+    "base": "DN",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DNTUSDT",
+    "base": "DN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOCKBTC",
+    "base": "DOC",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOCKUSDT",
+    "base": "DOCK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DODOBTC",
+    "base": "DOD",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DODOBUSD",
+    "base": "DOD",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DODOUSDT",
+    "base": "DOD",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEAUD",
+    "base": "DOGE",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEBIDR",
+    "base": "DOGE",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEBRL",
+    "base": "DOGE",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEBTC",
+    "base": "DOG",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEBUSD",
+    "base": "DOG",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEEUR",
+    "base": "DOGE",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEGBP",
+    "base": "DOGE",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGERUB",
+    "base": "DOGE",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGETRY",
+    "base": "DOGE",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOGEUSDT",
+    "base": "DOG",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTBIDR",
+    "base": "DOT",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTBNB",
+    "base": "DO",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTBRL",
+    "base": "DOT",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTBTC",
+    "base": "DO",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTBUSD",
+    "base": "DO",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTDOWNUSDT",
+    "base": "DOTDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "DOTEUR",
+    "base": "DOT",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTGBP",
+    "base": "DOT",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTTRY",
+    "base": "DOT",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DOTUPUSDT",
+    "base": "DOTU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "DOTUSDT",
+    "base": "DO",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DREPBTC",
+    "base": "DRE",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DREPUSDT",
+    "base": "DRE",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DUSKBTC",
+    "base": "DUS",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "DUSKUSDT",
+    "base": "DUSK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EASYBTC",
+    "base": "EASY",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EASYETH",
+    "base": "EASY",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EGLDBNB",
+    "base": "EGLD",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EGLDBTC",
+    "base": "EGL",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EGLDBUSD",
+    "base": "EGLD",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EGLDEUR",
+    "base": "EGLD",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EGLDUSDT",
+    "base": "EGL",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ELFBTC",
+    "base": "ELF",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ELFETH",
+    "base": "ELF",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJBNB",
+    "base": "ENJ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJBRL",
+    "base": "ENJ",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJBTC",
+    "base": "ENJ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJBUSD",
+    "base": "ENJ",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJETH",
+    "base": "ENJ",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJEUR",
+    "base": "ENJ",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJGBP",
+    "base": "ENJ",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ENJUSDT",
+    "base": "ENJ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSBNB",
+    "base": "EOS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSBTC",
+    "base": "EO",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSBUSD",
+    "base": "EO",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSDOWNUSDT",
+    "base": "EOSDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "EOSETH",
+    "base": "EOS",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSEUR",
+    "base": "EOS",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSTRY",
+    "base": "EOS",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSTUSD",
+    "base": "EOS",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSUPUSDT",
+    "base": "EOSU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "EOSUSDC",
+    "base": "EOS",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EOSUSDT",
+    "base": "EO",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EPSBTC",
+    "base": "EP",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EPSBUSD",
+    "base": "EP",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EPSUSDT",
+    "base": "EP",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCBNB",
+    "base": "ETC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCBRL",
+    "base": "ETC",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCBTC",
+    "base": "ET",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCBUSD",
+    "base": "ET",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCETH",
+    "base": "ET",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCEUR",
+    "base": "ETC",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETCUSDT",
+    "base": "ET",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHAUD",
+    "base": "ETH",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHBIDR",
+    "base": "ETH",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHBRL",
+    "base": "ETH",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHBTC",
+    "base": "ETH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHBUSD",
+    "base": "ETH",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHDAI",
+    "base": "E",
+    "quote": "THDAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHDOWNUSDT",
+    "base": "ETHDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "ETHEUR",
+    "base": "ETH",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHGBP",
+    "base": "ETH",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHPAX",
+    "base": "E",
+    "quote": "THPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHRUB",
+    "base": "ETH",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHTRY",
+    "base": "ETH",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHTUSD",
+    "base": "ETH",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHUAH",
+    "base": "E",
+    "quote": "THUAH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHUPUSDT",
+    "base": "ETHU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "ETHUSDC",
+    "base": "ETH",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHUSDT",
+    "base": "ETH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ETHZAR",
+    "base": "E",
+    "quote": "THZAR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EURBUSD",
+    "base": "EU",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EURUSDT",
+    "base": "EU",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EVXBTC",
+    "base": "EV",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EZBTC",
+    "base": "EZ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "EZETH",
+    "base": "EZ",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FETBNB",
+    "base": "FE",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FETBTC",
+    "base": "FE",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FETUSDT",
+    "base": "FE",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FILBNB",
+    "base": "FIL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FILBTC",
+    "base": "FI",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FILBUSD",
+    "base": "FIL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FILDOWNUSDT",
+    "base": "FILDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "FILUPUSDT",
+    "base": "FILU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "FILUSDT",
+    "base": "FI",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIOBNB",
+    "base": "FIO",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIOBTC",
+    "base": "FI",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIOBUSD",
+    "base": "FI",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIOUSDT",
+    "base": "FI",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIROBTC",
+    "base": "FIR",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIROETH",
+    "base": "FIRO",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FIROUSDT",
+    "base": "FIR",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FISBTC",
+    "base": "FI",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FISBUSD",
+    "base": "FI",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FISUSDT",
+    "base": "FI",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FLMBTC",
+    "base": "FL",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FLMBUSD",
+    "base": "FL",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FLMUSDT",
+    "base": "FL",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FORBTC",
+    "base": "FO",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FORBUSD",
+    "base": "FO",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FORTHBTC",
+    "base": "FORTH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FORTHBUSD",
+    "base": "FORTH",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FORTHUSDT",
+    "base": "FORTH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FRONTBTC",
+    "base": "FRO",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FRONTBUSD",
+    "base": "FRON",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FRONTETH",
+    "base": "FRON",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTMBNB",
+    "base": "FT",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTMBTC",
+    "base": "FT",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTMBUSD",
+    "base": "FT",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTMUSDT",
+    "base": "FT",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTTBNB",
+    "base": "FT",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTTBTC",
+    "base": "FT",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FTTUSDT",
+    "base": "FT",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FUNBTC",
+    "base": "FU",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FUNETH",
+    "base": "FUN",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FUNUSDT",
+    "base": "FU",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FXSBTC",
+    "base": "FX",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "FXSBUSD",
+    "base": "FX",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GASBTC",
+    "base": "GA",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GBPBUSD",
+    "base": "GB",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GBPUSDT",
+    "base": "GB",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GHSTBUSD",
+    "base": "GHS",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GHSTETH",
+    "base": "GHS",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GLMBTC",
+    "base": "GL",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GLMETH",
+    "base": "GLM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GOBTC",
+    "base": "G",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRSBTC",
+    "base": "GR",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRTBTC",
+    "base": "GR",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRTBUSD",
+    "base": "GR",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRTETH",
+    "base": "GR",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRTEUR",
+    "base": "GRT",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GRTUSDT",
+    "base": "GR",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GTOBTC",
+    "base": "GT",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GTOUSDT",
+    "base": "GT",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GVTBTC",
+    "base": "GV",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GXSBTC",
+    "base": "GX",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GXSETH",
+    "base": "GXS",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "GXSUSDT",
+    "base": "GX",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HARDBNB",
+    "base": "HARD",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HARDBTC",
+    "base": "HAR",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HARDBUSD",
+    "base": "HARD",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HARDUSDT",
+    "base": "HAR",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HBARBNB",
+    "base": "HBA",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HBARBTC",
+    "base": "HBA",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HBARBUSD",
+    "base": "HBA",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HBARUSDT",
+    "base": "HBA",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HEGICBUSD",
+    "base": "HEGI",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HEGICETH",
+    "base": "HEGI",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HIVEBTC",
+    "base": "HIV",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HIVEUSDT",
+    "base": "HIV",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HNTBTC",
+    "base": "H",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HNTUSDT",
+    "base": "HN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTBNB",
+    "base": "HO",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTBRL",
+    "base": "HOT",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTBUSD",
+    "base": "HO",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTETH",
+    "base": "HO",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTEUR",
+    "base": "HOT",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTTRY",
+    "base": "HOT",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "HOTUSDT",
+    "base": "HO",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICPBNB",
+    "base": "ICP",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICPBTC",
+    "base": "IC",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICPBUSD",
+    "base": "IC",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICPEUR",
+    "base": "ICP",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICPUSDT",
+    "base": "IC",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICXBNB",
+    "base": "IC",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICXBTC",
+    "base": "IC",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICXBUSD",
+    "base": "IC",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICXETH",
+    "base": "IC",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ICXUSDT",
+    "base": "IC",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IDEXBTC",
+    "base": "IDE",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IDEXBUSD",
+    "base": "IDE",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "INJBNB",
+    "base": "INJ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "INJBTC",
+    "base": "INJ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "INJBUSD",
+    "base": "INJ",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "INJUSDT",
+    "base": "INJ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOSTBNB",
+    "base": "IOS",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOSTBTC",
+    "base": "IOS",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOSTBUSD",
+    "base": "IOS",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOSTETH",
+    "base": "IOS",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOSTUSDT",
+    "base": "IOS",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTABNB",
+    "base": "IOT",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTABTC",
+    "base": "IOT",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTABUSD",
+    "base": "IOT",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTAETH",
+    "base": "IOTA",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTAUSDT",
+    "base": "IOT",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTXBTC",
+    "base": "IOT",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTXETH",
+    "base": "IOT",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IOTXUSDT",
+    "base": "IOT",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IQBNB",
+    "base": "IQ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IQBUSD",
+    "base": "IQ",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IRISBTC",
+    "base": "IRI",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "IRISUSDT",
+    "base": "IRI",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JSTBNB",
+    "base": "JS",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JSTBTC",
+    "base": "JS",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JSTBUSD",
+    "base": "JS",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JSTUSDT",
+    "base": "JS",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JUVBTC",
+    "base": "JUV",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JUVBUSD",
+    "base": "JUV",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "JUVUSDT",
+    "base": "JUV",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KAVABNB",
+    "base": "KAV",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KAVABTC",
+    "base": "KAV",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KAVABUSD",
+    "base": "KAV",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KAVAUSDT",
+    "base": "KAV",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KEYETH",
+    "base": "KEY",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KEYUSDT",
+    "base": "KEY",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KMDBTC",
+    "base": "KM",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KMDETH",
+    "base": "KMD",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KMDUSDT",
+    "base": "KM",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KNCBTC",
+    "base": "KN",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KNCBUSD",
+    "base": "KN",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KNCETH",
+    "base": "KN",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KNCUSDT",
+    "base": "KN",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KP3RBNB",
+    "base": "KP3",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KP3RBUSD",
+    "base": "KP3",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KSMBNB",
+    "base": "KS",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KSMBTC",
+    "base": "KS",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KSMBUSD",
+    "base": "KS",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "KSMUSDT",
+    "base": "KS",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINABTC",
+    "base": "LIN",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINABUSD",
+    "base": "LIN",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINAUSDT",
+    "base": "LIN",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKAUD",
+    "base": "LINK",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKBRL",
+    "base": "LINK",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKBTC",
+    "base": "LIN",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKBUSD",
+    "base": "LINK",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKDOWNUSDT",
+    "base": "LINKDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "LINKETH",
+    "base": "LINK",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKEUR",
+    "base": "LINK",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKGBP",
+    "base": "LINK",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKTRY",
+    "base": "LINK",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKTUSD",
+    "base": "LINK",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKUPUSDT",
+    "base": "LINKU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "LINKUSDC",
+    "base": "LINK",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LINKUSDT",
+    "base": "LINK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LITBTC",
+    "base": "LI",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LITBUSD",
+    "base": "LI",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LITUSDT",
+    "base": "LI",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LOOMBTC",
+    "base": "LOO",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LOOMETH",
+    "base": "LOOM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LPTBNB",
+    "base": "LP",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LPTBTC",
+    "base": "LP",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LPTBUSD",
+    "base": "LP",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LPTUSDT",
+    "base": "LP",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LRCBTC",
+    "base": "LR",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LRCBUSD",
+    "base": "LR",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LRCETH",
+    "base": "LR",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LRCUSDT",
+    "base": "LR",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LSKBTC",
+    "base": "LS",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LSKETH",
+    "base": "LSK",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LSKUSDT",
+    "base": "LSK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCBNB",
+    "base": "LTC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCBRL",
+    "base": "LTC",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCBTC",
+    "base": "LT",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCBUSD",
+    "base": "LT",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCDOWNUSDT",
+    "base": "LTCDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "LTCETH",
+    "base": "LT",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCEUR",
+    "base": "LTC",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCGBP",
+    "base": "LTC",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCPAX",
+    "base": "L",
+    "quote": "TCPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCRUB",
+    "base": "LTC",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCTUSD",
+    "base": "LTC",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCUPUSDT",
+    "base": "LTCU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "LTCUSDC",
+    "base": "LTC",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTCUSDT",
+    "base": "LT",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTOBTC",
+    "base": "LT",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LTOUSDT",
+    "base": "LT",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LUNABNB",
+    "base": "LUN",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LUNABTC",
+    "base": "LUN",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LUNABUSD",
+    "base": "LUN",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LUNAEUR",
+    "base": "LUNA",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "LUNAUSDT",
+    "base": "LUN",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MANABTC",
+    "base": "MAN",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MANABUSD",
+    "base": "MAN",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MANAETH",
+    "base": "MANA",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MANAUSDT",
+    "base": "MAN",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MASKBNB",
+    "base": "MASK",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MASKBUSD",
+    "base": "MASK",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MASKUSDT",
+    "base": "MASK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICBIDR",
+    "base": "MATIC",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICBNB",
+    "base": "MATIC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICBRL",
+    "base": "MATIC",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICBTC",
+    "base": "MATI",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICBUSD",
+    "base": "MATI",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICEUR",
+    "base": "MATIC",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICGBP",
+    "base": "MATIC",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICRUB",
+    "base": "MATIC",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MATICUSDT",
+    "base": "MATI",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MBLBNB",
+    "base": "MBL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MBLUSDT",
+    "base": "MB",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDABTC",
+    "base": "MD",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDTBTC",
+    "base": "MD",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDTUSDT",
+    "base": "MD",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDXBNB",
+    "base": "MD",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDXBTC",
+    "base": "MD",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDXBUSD",
+    "base": "MD",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MDXUSDT",
+    "base": "MD",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MFTBNB",
+    "base": "MF",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MFTETH",
+    "base": "MF",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MFTUSDT",
+    "base": "MF",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MIRBTC",
+    "base": "MI",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MIRBUSD",
+    "base": "MI",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MIRUSDT",
+    "base": "MI",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MITHBNB",
+    "base": "MITH",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MITHBTC",
+    "base": "MITH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MITHUSDT",
+    "base": "MITH",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MKRBNB",
+    "base": "MK",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MKRBTC",
+    "base": "MK",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MKRBUSD",
+    "base": "MK",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MKRUSDT",
+    "base": "MK",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MTHBTC",
+    "base": "MTH",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MTLBTC",
+    "base": "MT",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MTLETH",
+    "base": "MTL",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "MTLUSDT",
+    "base": "MT",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NANOBTC",
+    "base": "NAN",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NANOBUSD",
+    "base": "NAN",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NANOETH",
+    "base": "NANO",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NANOUSDT",
+    "base": "NAN",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NASBTC",
+    "base": "NA",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NASETH",
+    "base": "NAS",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NAVBTC",
+    "base": "NAV",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NAVETH",
+    "base": "NAV",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NBSBTC",
+    "base": "NB",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NBSUSDT",
+    "base": "NB",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NCASHETH",
+    "base": "NCASH",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEARBNB",
+    "base": "NEA",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEARBTC",
+    "base": "NEA",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEARBUSD",
+    "base": "NEA",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEARUSDT",
+    "base": "NEA",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEBLBTC",
+    "base": "NEB",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEBLETH",
+    "base": "NEBL",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOBNB",
+    "base": "NEO",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOBTC",
+    "base": "NE",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOBUSD",
+    "base": "NE",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOETH",
+    "base": "NEO",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOTRY",
+    "base": "NEO",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOUSDC",
+    "base": "NEO",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NEOUSDT",
+    "base": "NE",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NKNBTC",
+    "base": "NK",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NKNUSDT",
+    "base": "NK",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NMRBNB",
+    "base": "NM",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NMRBTC",
+    "base": "NM",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NMRBUSD",
+    "base": "NM",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NMRUSDT",
+    "base": "NM",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NPXSETH",
+    "base": "NPXS",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NPXSUSDT",
+    "base": "NPX",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NUBNB",
+    "base": "NU",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NUBTC",
+    "base": "NU",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NUBUSD",
+    "base": "NU",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NULSBTC",
+    "base": "NUL",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NULSUSDT",
+    "base": "NUL",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NUUSDT",
+    "base": "NU",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "NXSBTC",
+    "base": "NX",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OAXBTC",
+    "base": "OA",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OCEANBNB",
+    "base": "OCEAN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OCEANBTC",
+    "base": "OCEA",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OCEANBUSD",
+    "base": "OCEAN",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OCEANUSDT",
+    "base": "OCEA",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OGBTC",
+    "base": "O",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OGNBNB",
+    "base": "OGN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OGNBTC",
+    "base": "OG",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OGNUSDT",
+    "base": "OG",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OGUSDT",
+    "base": "O",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMBTC",
+    "base": "O",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMBUSD",
+    "base": "O",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMGBTC",
+    "base": "OM",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMGBUSD",
+    "base": "OMG",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMGETH",
+    "base": "OMG",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMGUSDT",
+    "base": "OM",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OMUSDT",
+    "base": "O",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONEBNB",
+    "base": "ONE",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONEBTC",
+    "base": "ON",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONEBUSD",
+    "base": "ON",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONEUSDT",
+    "base": "ON",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONGBTC",
+    "base": "ON",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONGUSDT",
+    "base": "ON",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTBNB",
+    "base": "ON",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTBTC",
+    "base": "O",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTBUSD",
+    "base": "ON",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTETH",
+    "base": "ON",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTTRY",
+    "base": "ONT",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ONTUSDT",
+    "base": "ON",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ORNBTC",
+    "base": "OR",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ORNUSDT",
+    "base": "OR",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OSTBTC",
+    "base": "OS",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OSTETH",
+    "base": "OS",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OXTBTC",
+    "base": "OX",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "OXTUSDT",
+    "base": "OX",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PAXBUSD",
+    "base": "PA",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PAXGBNB",
+    "base": "PAXG",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PAXGBTC",
+    "base": "PAX",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PAXGUSDT",
+    "base": "PAX",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PAXUSDT",
+    "base": "PA",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERLBNB",
+    "base": "PERL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERLBTC",
+    "base": "PER",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERLUSDT",
+    "base": "PER",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERPBTC",
+    "base": "PER",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERPBUSD",
+    "base": "PER",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PERPUSDT",
+    "base": "PER",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PHABTC",
+    "base": "PH",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PHABUSD",
+    "base": "PH",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PHBBTC",
+    "base": "PHB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PHBTUSD",
+    "base": "PHB",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PIVXBTC",
+    "base": "PIV",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PIVXETH",
+    "base": "PIV",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PNTBTC",
+    "base": "P",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PNTUSDT",
+    "base": "PN",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POABTC",
+    "base": "PO",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POLSBNB",
+    "base": "POLS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POLSBTC",
+    "base": "POL",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POLSBUSD",
+    "base": "POL",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POLSUSDT",
+    "base": "POL",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POLYBTC",
+    "base": "POLY",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PONDBTC",
+    "base": "PON",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PONDBUSD",
+    "base": "POND",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PONDUSDT",
+    "base": "PON",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POWRBTC",
+    "base": "POW",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "POWRETH",
+    "base": "POWR",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PPTBTC",
+    "base": "PP",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PROMBNB",
+    "base": "PRO",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PROMBUSD",
+    "base": "PRO",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PROSETH",
+    "base": "PROS",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PSGBTC",
+    "base": "PS",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PSGBUSD",
+    "base": "PSG",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PSGUSDT",
+    "base": "PS",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PUNDIXETH",
+    "base": "PUNDI",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "PUNDIXUSDT",
+    "base": "PUNDI",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QKCBTC",
+    "base": "QK",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QKCETH",
+    "base": "QK",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QLCBTC",
+    "base": "QL",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QLCETH",
+    "base": "QL",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QSPBTC",
+    "base": "QS",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QSPETH",
+    "base": "QSP",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QTUMBTC",
+    "base": "QTU",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QTUMBUSD",
+    "base": "QTU",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QTUMETH",
+    "base": "QTUM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "QTUMUSDT",
+    "base": "QTU",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RAMPBTC",
+    "base": "RAM",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RAMPBUSD",
+    "base": "RAM",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RAMPUSDT",
+    "base": "RAM",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RCNBTC",
+    "base": "RC",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RDNBTC",
+    "base": "RD",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REEFBTC",
+    "base": "REEF",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REEFBUSD",
+    "base": "REEF",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REEFUSDT",
+    "base": "REEF",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RENBTC",
+    "base": "RE",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RENBTCBTC",
+    "base": "RENBT",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RENBTCETH",
+    "base": "RENBT",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RENUSDT",
+    "base": "RE",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REPBTC",
+    "base": "RE",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REPETH",
+    "base": "REP",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REPUSDT",
+    "base": "RE",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "REQBTC",
+    "base": "REQ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RIFBTC",
+    "base": "RIF",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RIFUSDT",
+    "base": "RIF",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RLCBTC",
+    "base": "RL",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RLCBUSD",
+    "base": "RL",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RLCETH",
+    "base": "RL",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RLCUSDT",
+    "base": "RL",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ROSEBTC",
+    "base": "ROS",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ROSEBUSD",
+    "base": "ROS",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ROSEUSDT",
+    "base": "ROS",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RSRBNB",
+    "base": "RS",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RSRBTC",
+    "base": "RS",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RSRBUSD",
+    "base": "RS",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RSRUSDT",
+    "base": "RS",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RUNEBNB",
+    "base": "RUNE",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RUNEBTC",
+    "base": "RUN",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RUNEBUSD",
+    "base": "RUN",
+    "quote": "EBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RUNEUSDT",
+    "base": "RUN",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RVNBNB",
+    "base": "RVN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RVNBTC",
+    "base": "RV",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RVNBUSD",
+    "base": "RVN",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RVNTRY",
+    "base": "RVN",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "RVNUSDT",
+    "base": "RV",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SANDBNB",
+    "base": "SAND",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SANDBTC",
+    "base": "SAN",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SANDBUSD",
+    "base": "SAND",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SANDUSDT",
+    "base": "SAN",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCBNB",
+    "base": "SC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCBTC",
+    "base": "S",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCETH",
+    "base": "S",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCRTBTC",
+    "base": "SCR",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCRTETH",
+    "base": "SCR",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SCUSDT",
+    "base": "S",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SFPBTC",
+    "base": "SF",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SFPBUSD",
+    "base": "SF",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SFPUSDT",
+    "base": "SF",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBBRL",
+    "base": "SHIB",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBBUSD",
+    "base": "SHIB",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBEUR",
+    "base": "SHIB",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBRUB",
+    "base": "SHIB",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBTRY",
+    "base": "SHIB",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SHIBUSDT",
+    "base": "SHIB",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SKLBTC",
+    "base": "SK",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SKLBUSD",
+    "base": "SKL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SKLUSDT",
+    "base": "SK",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SKYBTC",
+    "base": "SKY",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SLPBUSD",
+    "base": "SL",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SLPETH",
+    "base": "SLP",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SLPUSDT",
+    "base": "SL",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNGLSBTC",
+    "base": "SNGL",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNMBTC",
+    "base": "SN",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNTBTC",
+    "base": "S",
+    "quote": "NTBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNTETH",
+    "base": "SN",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNXBNB",
+    "base": "SN",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNXBTC",
+    "base": "SN",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNXBUSD",
+    "base": "SN",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SNXUSDT",
+    "base": "SN",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SOLBNB",
+    "base": "SOL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SOLBTC",
+    "base": "SO",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SOLBUSD",
+    "base": "SOL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SOLEUR",
+    "base": "SOL",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SOLUSDT",
+    "base": "SO",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SPARTABNB",
+    "base": "SPART",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SRMBNB",
+    "base": "SR",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SRMBTC",
+    "base": "SR",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SRMBUSD",
+    "base": "SR",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SRMUSDT",
+    "base": "SR",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STEEMBTC",
+    "base": "STEE",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STEEMETH",
+    "base": "STEEM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STMXBNB",
+    "base": "STM",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STMXBTC",
+    "base": "STM",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STMXETH",
+    "base": "STM",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STMXUSDT",
+    "base": "STM",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STORJBTC",
+    "base": "STORJ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STORJUSDT",
+    "base": "STORJ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STPTBTC",
+    "base": "STP",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STPTUSDT",
+    "base": "STP",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STRAXBTC",
+    "base": "STRA",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STRAXBUSD",
+    "base": "STRA",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STRAXETH",
+    "base": "STRA",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STRAXUSDT",
+    "base": "STRA",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STXBNB",
+    "base": "ST",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STXBTC",
+    "base": "ST",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "STXUSDT",
+    "base": "ST",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUNBTC",
+    "base": "SU",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUNUSDT",
+    "base": "SU",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUPERBTC",
+    "base": "SUPE",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SUPERBUSD",
+    "base": "SUPE",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SUPERUSDT",
+    "base": "SUPE",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SUSDBTC",
+    "base": "SUS",
+    "quote": "DBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUSDUSDT",
+    "base": "SUS",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUSHIBNB",
+    "base": "SUSH",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUSHIBTC",
+    "base": "SUSH",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUSHIBUSD",
+    "base": "SUSHI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SUSHIDOWNUSDT",
+    "base": "SUSHIDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SUSHIUPUSDT",
+    "base": "SUSHIU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SUSHIUSDT",
+    "base": "SUSHI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SWRVBNB",
+    "base": "SWRV",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SWRVBUSD",
+    "base": "SWRV",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPAUD",
+    "base": "SXP",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPBIDR",
+    "base": "SXP",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPBNB",
+    "base": "SXP",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPBTC",
+    "base": "SX",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPBUSD",
+    "base": "SX",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPDOWNUSDT",
+    "base": "SXPDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SXPEUR",
+    "base": "SXP",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPGBP",
+    "base": "SXP",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPTRY",
+    "base": "SXP",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SXPUPUSDT",
+    "base": "SXPU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "SXPUSDT",
+    "base": "SX",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SYSBTC",
+    "base": "SY",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "SYSBUSD",
+    "base": "SY",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TCTBTC",
+    "base": "TC",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TCTUSDT",
+    "base": "TC",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TFUELBTC",
+    "base": "TFUE",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TFUELUSDT",
+    "base": "TFUE",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETABNB",
+    "base": "THET",
+    "quote": "ABNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETABTC",
+    "base": "THET",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETABUSD",
+    "base": "THET",
+    "quote": "ABUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETAETH",
+    "base": "THETA",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETAEUR",
+    "base": "THETA",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "THETAUSDT",
+    "base": "THET",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TKOBIDR",
+    "base": "TKO",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TKOBTC",
+    "base": "TK",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TKOBUSD",
+    "base": "TK",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TKOUSDT",
+    "base": "TK",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TLMBTC",
+    "base": "TL",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TLMBUSD",
+    "base": "TL",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TLMUSDT",
+    "base": "TL",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TOMOBTC",
+    "base": "TOM",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TOMOBUSD",
+    "base": "TOM",
+    "quote": "OBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TOMOUSDT",
+    "base": "TOM",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRBBTC",
+    "base": "TRB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRBBUSD",
+    "base": "TRB",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRBUSDT",
+    "base": "TRB",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TROYBNB",
+    "base": "TROY",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TROYBTC",
+    "base": "TROY",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TROYUSDT",
+    "base": "TROY",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRUBTC",
+    "base": "TRU",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRUBUSD",
+    "base": "TRU",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRUUSDT",
+    "base": "TRU",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXAUD",
+    "base": "TRX",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXBNB",
+    "base": "TR",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXBTC",
+    "base": "TR",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXBUSD",
+    "base": "TR",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXDOWNUSDT",
+    "base": "TRXDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "TRXETH",
+    "base": "TR",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXEUR",
+    "base": "TRX",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXPAX",
+    "base": "T",
+    "quote": "RXPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXTRY",
+    "base": "TRX",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXTUSD",
+    "base": "TRX",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXUPUSDT",
+    "base": "TRXU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "TRXUSDC",
+    "base": "TRX",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXUSDT",
+    "base": "TR",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TRXXRP",
+    "base": "T",
+    "quote": "RXXRP",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TUSDBUSD",
+    "base": "TUSD",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TUSDUSDT",
+    "base": "TUS",
+    "quote": "DUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TVKBTC",
+    "base": "TV",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TVKBUSD",
+    "base": "TVK",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TWTBTC",
+    "base": "TW",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TWTBUSD",
+    "base": "TW",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "TWTUSDT",
+    "base": "TW",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UFTBUSD",
+    "base": "UF",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UFTETH",
+    "base": "UF",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UMABTC",
+    "base": "UM",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UMAUSDT",
+    "base": "UM",
+    "quote": "AUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNFIBNB",
+    "base": "UNF",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNFIBTC",
+    "base": "UNF",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNFIBUSD",
+    "base": "UNFI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNFIUSDT",
+    "base": "UNFI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNIBNB",
+    "base": "UN",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNIBTC",
+    "base": "UN",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNIBUSD",
+    "base": "UNI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNIDOWNUSDT",
+    "base": "UNIDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "UNIEUR",
+    "base": "UNI",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UNIUPUSDT",
+    "base": "UNIU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "UNIUSDT",
+    "base": "UNI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDCBUSD",
+    "base": "USD",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDCUSDT",
+    "base": "USD",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTBIDR",
+    "base": "USDT",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTBRL",
+    "base": "USDT",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTBVND",
+    "base": "US",
+    "quote": "DTBVND",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTDAI",
+    "base": "U",
+    "quote": "SDTDAI",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTGYEN",
+    "base": "US",
+    "quote": "DTGYEN",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTIDRT",
+    "base": "US",
+    "quote": "DTIDRT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTNGN",
+    "base": "U",
+    "quote": "SDTNGN",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTRUB",
+    "base": "USDT",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTTRY",
+    "base": "USDT",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTUAH",
+    "base": "U",
+    "quote": "SDTUAH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "USDTZAR",
+    "base": "U",
+    "quote": "SDTZAR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UTKBTC",
+    "base": "UT",
+    "quote": "KBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "UTKUSDT",
+    "base": "UTK",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETBNB",
+    "base": "VE",
+    "quote": "TBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETBTC",
+    "base": "VE",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETBUSD",
+    "base": "VE",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETETH",
+    "base": "VE",
+    "quote": "TETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETEUR",
+    "base": "VET",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETGBP",
+    "base": "VET",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETTRY",
+    "base": "VET",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VETUSDT",
+    "base": "VE",
+    "quote": "TUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VIABTC",
+    "base": "VI",
+    "quote": "ABTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VIBBTC",
+    "base": "VIB",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VIBETH",
+    "base": "VIB",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VIDTBTC",
+    "base": "VID",
+    "quote": "TBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VIDTBUSD",
+    "base": "VID",
+    "quote": "TBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VITEBTC",
+    "base": "VIT",
+    "quote": "EBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VITEUSDT",
+    "base": "VIT",
+    "quote": "EUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VTHOBNB",
+    "base": "VTHO",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "VTHOUSDT",
+    "base": "VTH",
+    "quote": "OUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WABIBNB",
+    "base": "WAB",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WABIBTC",
+    "base": "WAB",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WANBNB",
+    "base": "WAN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WANBTC",
+    "base": "WA",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WANETH",
+    "base": "WAN",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WANUSDT",
+    "base": "WA",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WAVESBNB",
+    "base": "WAVES",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WAVESBTC",
+    "base": "WAVE",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WAVESBUSD",
+    "base": "WAVE",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WAVESETH",
+    "base": "WAVES",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WAVESUSDT",
+    "base": "WAVE",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WBTCBTC",
+    "base": "WBT",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WBTCETH",
+    "base": "WBT",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINBNB",
+    "base": "WIN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINBRL",
+    "base": "WIN",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINBUSD",
+    "base": "WIN",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINEUR",
+    "base": "WIN",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINGBNB",
+    "base": "WING",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINGBTC",
+    "base": "WIN",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINGBUSD",
+    "base": "WING",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINGUSDT",
+    "base": "WIN",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINTRX",
+    "base": "W",
+    "quote": "INTRX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINUSDC",
+    "base": "WIN",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WINUSDT",
+    "base": "WI",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WNXMBNB",
+    "base": "WNX",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WNXMBTC",
+    "base": "WNX",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WNXMUSDT",
+    "base": "WNX",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WPRBTC",
+    "base": "WP",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WRXBNB",
+    "base": "WR",
+    "quote": "XBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WRXBTC",
+    "base": "WR",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WRXBUSD",
+    "base": "WR",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WRXEUR",
+    "base": "WRX",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WRXUSDT",
+    "base": "WR",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WTCBNB",
+    "base": "WTC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WTCBTC",
+    "base": "WT",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "WTCUSDT",
+    "base": "WT",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XEMBTC",
+    "base": "XE",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XEMBUSD",
+    "base": "XE",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XEMETH",
+    "base": "XEM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XEMUSDT",
+    "base": "XE",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMBNB",
+    "base": "XL",
+    "quote": "MBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMBTC",
+    "base": "XL",
+    "quote": "MBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMBUSD",
+    "base": "XL",
+    "quote": "MBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMDOWNUSDT",
+    "base": "XLMDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XLMETH",
+    "base": "XLM",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMEUR",
+    "base": "XLM",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMTRY",
+    "base": "XLM",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XLMUPUSDT",
+    "base": "XLMU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XLMUSDT",
+    "base": "XL",
+    "quote": "MUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XMRBNB",
+    "base": "XM",
+    "quote": "RBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XMRBTC",
+    "base": "XM",
+    "quote": "RBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XMRBUSD",
+    "base": "XM",
+    "quote": "RBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XMRETH",
+    "base": "XMR",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XMRUSDT",
+    "base": "XM",
+    "quote": "RUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPAUD",
+    "base": "XRP",
+    "quote": "AUD",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPBNB",
+    "base": "XRP",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPBRL",
+    "base": "XRP",
+    "quote": "BRL",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPBTC",
+    "base": "XR",
+    "quote": "PBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPBUSD",
+    "base": "XR",
+    "quote": "PBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPDOWNUSDT",
+    "base": "XRPDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XRPETH",
+    "base": "XRP",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPEUR",
+    "base": "XRP",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPGBP",
+    "base": "XRP",
+    "quote": "GBP",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPPAX",
+    "base": "X",
+    "quote": "RPPAX",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPRUB",
+    "base": "XRP",
+    "quote": "RUB",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPTRY",
+    "base": "XRP",
+    "quote": "TRY",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPTUSD",
+    "base": "XRP",
+    "quote": "TUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPUPUSDT",
+    "base": "XRPU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XRPUSDC",
+    "base": "XRP",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XRPUSDT",
+    "base": "XR",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XTZBNB",
+    "base": "XTZ",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XTZBTC",
+    "base": "XTZ",
+    "quote": "BTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XTZBUSD",
+    "base": "XTZ",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XTZDOWNUSDT",
+    "base": "XTZDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XTZUPUSDT",
+    "base": "XTZU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "XTZUSDT",
+    "base": "XTZ",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVGBTC",
+    "base": "XV",
+    "quote": "GBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVGBUSD",
+    "base": "XVG",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVGETH",
+    "base": "XVG",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVGUSDT",
+    "base": "XV",
+    "quote": "GUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVSBNB",
+    "base": "XVS",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVSBTC",
+    "base": "XV",
+    "quote": "SBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVSBUSD",
+    "base": "XV",
+    "quote": "SBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "XVSUSDT",
+    "base": "XV",
+    "quote": "SUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIBNB",
+    "base": "YF",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIBTC",
+    "base": "YF",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIBUSD",
+    "base": "YFI",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIDOWNUSDT",
+    "base": "YFIDO",
+    "quote": "WNUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "YFIEUR",
+    "base": "YFI",
+    "quote": "EUR",
+    "quote_type": "fiat",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIIBNB",
+    "base": "YFI",
+    "quote": "IBNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIIBTC",
+    "base": "YFI",
+    "quote": "IBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIIBUSD",
+    "base": "YFII",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIIUSDT",
+    "base": "YFII",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YFIUPUSDT",
+    "base": "YFIU",
+    "quote": "PUSDT",
+    "quote_type": "crypto",
+    "leveraged": true,
+    "is_etf": false,
+    "keep": false
+  },
+  {
+    "symbol": "YFIUSDT",
+    "base": "YFI",
+    "quote": "USDT",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "YOYOBTC",
+    "base": "YOY",
+    "quote": "OBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECBNB",
+    "base": "ZEC",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECBTC",
+    "base": "ZE",
+    "quote": "CBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECBUSD",
+    "base": "ZE",
+    "quote": "CBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECETH",
+    "base": "ZE",
+    "quote": "CETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECUSDC",
+    "base": "ZEC",
+    "quote": "USDC",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZECUSDT",
+    "base": "ZE",
+    "quote": "CUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZENBNB",
+    "base": "ZEN",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZENBTC",
+    "base": "ZE",
+    "quote": "NBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZENBUSD",
+    "base": "ZEN",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZENETH",
+    "base": "ZEN",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZENUSDT",
+    "base": "ZE",
+    "quote": "NUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILBIDR",
+    "base": "ZIL",
+    "quote": "BIDR",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILBNB",
+    "base": "ZIL",
+    "quote": "BNB",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILBTC",
+    "base": "ZI",
+    "quote": "LBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILBUSD",
+    "base": "ZIL",
+    "quote": "BUSD",
+    "quote_type": "stablecoin",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILETH",
+    "base": "ZIL",
+    "quote": "ETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZILUSDT",
+    "base": "ZI",
+    "quote": "LUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZRXBTC",
+    "base": "ZR",
+    "quote": "XBTC",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZRXBUSD",
+    "base": "ZR",
+    "quote": "XBUSD",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZRXETH",
+    "base": "ZR",
+    "quote": "XETH",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  },
+  {
+    "symbol": "ZRXUSDT",
+    "base": "ZR",
+    "quote": "XUSDT",
+    "quote_type": "crypto",
+    "leveraged": false,
+    "is_etf": false,
+    "keep": true
+  }
+]

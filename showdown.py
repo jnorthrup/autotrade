@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,7 @@ from wallet import OrderShim, SimWallet
 
 # --- Constants & Helpers ---
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
+STOCHASTIC_SPAN_LIMIT = 50
 PLATEAU_WINDOW = 100
 PLATEAU_THRESHOLD = 1e-5
 PLATEAU_PATIENCE = 3
@@ -171,6 +173,23 @@ def _pool() -> PoolClient:
     return PoolClient()
 
 
+def _checkpoint_variant(checkpoint_path: str, variant: str) -> str:
+    """
+    Return a variant filename for a checkpoint path by inserting the variant
+    before the file extension. Example: 'model_weights.pt' + 'best' ->
+    'model_weights.best.pt'. Ensures parent directory exists.
+    """
+    p = Path(str(checkpoint_path))
+    parent = p.parent or Path(".")
+    # Build new filename inserting the variant before the suffix (if any)
+    if p.suffix:
+        new_name = f"{p.stem}.{variant}{p.suffix}"
+    else:
+        new_name = f"{p.name}.{variant}"
+    parent.mkdir(parents=True, exist_ok=True)
+    return str((parent / new_name))
+
+
 def _next_square_cube_size(size: int) -> Optional[int]:
     if size == 1:
         return SQUARE_CUBE_SIZES[0]
@@ -276,32 +295,36 @@ def _profit_based_loss(
     max_pnl: float,
     pnl_history: List[float],
     stagnation_window: int = 20,
-    inactivity_penalty: float = 0.001,
-    stagnation_penalty: float = 0.0005,
 ) -> Tuple[float, float, float, float]:
     current_balance = wallet.worth(graph, bar_idx)
     total_pnl = current_balance - capital
     max_pnl = max(max_pnl, total_pnl)
     pnl_history.append(bar_pnl)
+    # Base loss: penalize negative bar PnL (intrabar loss)
     loss = abs(bar_pnl) / max(capital, 1.0) if bar_pnl < 0 else 0.0
-    if wallet.open_order_count == 0:
-        loss += inactivity_penalty
-    if len(pnl_history) >= stagnation_window:
-        recent = np.mean(pnl_history[-stagnation_window:])
-        older = (
-            np.mean(pnl_history[-2 * stagnation_window : -stagnation_window])
-            if len(pnl_history) >= 2 * stagnation_window
-            else recent
-        )
-        if recent <= older:
-            loss += stagnation_penalty * (
-                1
-                + max(
-                    0,
-                    stagnation_window
-                    - len([p for p in pnl_history[-stagnation_window:] if p > 0]),
-                )
-            )
+    # Strong, explicit drawdown penalty so wiping out capital yields a large loss
+    try:
+        normalized_drawdown = max(0.0, (float(capital) - float(current_balance)) / max(float(capital), 1.0))
+    except Exception:
+        normalized_drawdown = 0.0
+    # Make a wipeout (current_balance == 0) count as a full 1.0 loss by default
+    loss += normalized_drawdown * 1.0
+    # Penalize having too little of the portfolio in the value asset (e.g., USD)
+    try:
+        route_vals = wallet._route_values(graph, bar_idx)
+        value_asset = getattr(wallet, "value_asset", None)
+        value_asset_qty = float(wallet.balance(value_asset).total) if value_asset is not None else 0.0
+        value_asset_value = value_asset_qty * float(route_vals.get(value_asset, 1.0)) if value_asset is not None else 0.0
+        fraction_value_asset = value_asset_value / max(current_balance, 1e-12) if current_balance > 0.0 else 0.0
+    except Exception:
+        fraction_value_asset = 1.0
+    # If less than 5% in value asset, add a penalty that scales with the shortfall
+    min_value_frac = 0.05
+    if fraction_value_asset < min_value_frac:
+        loss += (min_value_frac - fraction_value_asset) * 2.0
+    # NOTE: paralysis/inactivity and stagnation penalties removed to let PnL
+    # be the primary differentiable signal. Parking (no open orders) is handled
+    # during training as an amplified update rather than an additive penalty.
     if max_pnl - total_pnl > 0:
         loss += (max_pnl - total_pnl) / max(capital, 1.0) * 0.01
     return loss, bar_pnl, total_pnl, max_pnl
@@ -316,6 +339,7 @@ def run_walk_forward_validation(
     print_every: int = 0,
     capital: float = 100.0,
     use_profit_loss: bool = False,
+    repost_each_bar: bool = False,
 ) -> Tuple[Optional[float], int]:
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
@@ -383,6 +407,11 @@ def run_walk_forward_validation(
                 eval_graph, bar_idx=bar_idx, fee_rate=eval_graph.fee_rate
             )
             if eval_model.ready_for_prediction(bar_idx):
+                # If using a non-GTC workflow where the bot reposts orders
+                # each bar, cancel existing reservations first so new
+                # allocations can be placed from freed balance.
+                if repost_each_bar:
+                    wallet.repost_open_orders(bar_idx=bar_idx)
                 wallet.reserve_orders(
                     _orders_from_predictions(
                         wallet,
@@ -505,6 +534,12 @@ def run_training(
             # predictions can actually move and eventually produce trades.
             train_loss = None
             if model.ready_for_update(bar_idx, edge_accels, graph=graph):
+                # If the wallet currently has no open orders (parking),
+                # amplify the training update so the model learns from PnL
+                # swings rather than being softly penalized. Use a loss
+                # multiplier to control gradient scale while preserving
+                # gradient clipping.
+                multiplier = 5.0 if getattr(wallet, "open_order_count", 0) == 0 else 1.0
                 train_loss = model.update(
                     graph,
                     edge_accels,
@@ -512,6 +547,7 @@ def run_training(
                     actual_velocities=edge_velocities,
                     hit_ptt=hit_ptt,
                     hit_stop=hit_stop,
+                    loss_multiplier=multiplier,
                 )
             _profit_loss, bar_pnl, total_pnl, max_pnl = _profit_based_loss(
                 wallet,
@@ -615,46 +651,125 @@ def _list_all_exchange_subscriptions(
         return []
 
 
-def _compute_volatility_filter(
-    db_path: str,
-    all_pairs: List[Dict[str, str]],
-    lookback_days: int = 365,
-    granularity: str = "300",
-    min_velocity: float = 0.001,
+def _list_pairs_table_subscriptions(
+    db_path: str, exchange: Optional[str] = None
 ) -> List[Dict[str, str]]:
-    end = _utc_now_naive()
-    start = end - timedelta(days=lookback_days)
-    filtered = []
-    use_pool_flag = _use_pool_for_db(db_path)
-    pool = _pool() if use_pool_flag else None
-    for sub in all_pairs:
-        pid, exchange = sub["product_id"], sub["exchange"]
-        parts = pid.split("-", 1)
-        if len(parts) != 2 or (
-            parts[0] in {"USD", "USDT", "EUR"} and parts[1] in {"USD", "USDT", "EUR"}
-        ):
-            continue
+    try:
+        if _use_pool_for_db(db_path):
+            rows = _pool().execute(
+                "SELECT DISTINCT exchange, product_id FROM pairs"
+                if exchange is None
+                else "SELECT DISTINCT exchange, product_id FROM pairs WHERE exchange = ?",
+                [] if exchange is None else [exchange],
+            )
+        else:
+            with duckdb.connect(db_path, read_only=True) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT exchange, product_id FROM pairs"
+                    if exchange is None
+                    else "SELECT DISTINCT exchange, product_id FROM pairs WHERE exchange = ?",
+                    [] if exchange is None else [exchange],
+                ).fetchall()
+        deduped = {}
+        for row in rows:
+            if isinstance(row, (tuple, list)) and len(row) >= 2:
+                ex, pid = str(row[0]).strip(), str(row[1]).strip()
+                if ex and pid and "-" in pid:
+                    deduped[(ex, pid)] = {"exchange": ex, "product_id": pid}
+        return list(deduped.values())
+    except Exception:
+        return []
+
+
+def _bootstrap_binance_pair_universe(db_path: str) -> List[Dict[str, str]]:
+    """Ensure the Binance pair universe exists in the `pairs` table.
+
+    We prefer the cleaned local Binance pair list because it is fast and stable;
+    if it is missing, we fall back to data.binance.vision / Binance API symbol
+    discovery using the same heuristic used by the pair import tool.
+    """
+    current = _list_pairs_table_subscriptions(db_path, exchange="binance")
+    if current:
+        return current
+
+    try:
+        from tools import import_binance_vision_pairs as ibv
+
+        source_pairs: List[Tuple[str, str]] = []
+        cleaned = Path("binance_pairs_cleaned.json")
+        if cleaned.exists():
+            data = json.loads(cleaned.read_text())
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                base = item.get("base") or item.get("base_asset")
+                quote = item.get("quote") or item.get("quote_asset")
+                if base and quote:
+                    source_pairs.append((str(base).upper(), str(quote).upper()))
+                else:
+                    sym = item.get("symbol")
+                    res = ibv.split_symbol(sym) if sym else None
+                    if res:
+                        source_pairs.append((res[0].upper(), res[1].upper()))
+        if not source_pairs:
+            symbols = ibv.collect_remote_symbols(
+                "https://data.binance.vision/?prefix=data/spot/monthly/klines/"
+            )
+            source_pairs = [res for sym in symbols if (res := ibv.split_symbol(sym))]
+        if source_pairs:
+            ibv.write_pairs_to_db(db_path, "binance", source_pairs)
+    except Exception as exc:
+        print(f"[Autoresearch] WARNING: failed to bootstrap Binance pair universe: {exc}")
+
+    return _list_pairs_table_subscriptions(db_path, exchange="binance")
+
+
+def _prefetch_binance_candles_window(
+    db_path: str,
+    selected_pairs: List[str],
+    start_time: datetime,
+    end_time: datetime,
+    granularity: str = "300",
+):
+    if not selected_pairs:
+        return
+    try:
+        import binance_cache
+
+        for pid in selected_pairs:
+            try:
+                binance_cache.fetch_binance_vision(
+                    db_path,
+                    pid,
+                    granularity=granularity,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _sanitize_training_subscriptions(
+    all_pairs: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    # Candle-close compression does not need extra activity gating. We only
+    # keep valid BASE-QUOTE subscriptions and drop fiat-fiat pairs so the
+    # training graph is explicit and stable.
+    result: List[Dict[str, str]] = []
+    for sub in all_pairs or []:
         try:
-            if use_pool_flag:
-                rows = pool.execute(
-                    "SELECT AVG(ABS(LN(close / NULLIF(open, 0)))) FROM candles WHERE exchange = ? AND product_id = ? AND granularity = ? AND timestamp >= ? AND timestamp < ? AND open > 0 AND close > 0",
-                    [exchange, pid, granularity, start, end],
-                )
-                mean_vel = (
-                    rows[0][0] if rows and rows[0] and rows[0][0] is not None else 0.0
-                )
-            else:
-                with duckdb.connect(db_path, read_only=True) as conn:
-                    row = conn.execute(
-                        "SELECT AVG(ABS(LN(close / NULLIF(open, 0)))) FROM candles WHERE exchange = ? AND product_id = ? AND granularity = ? AND timestamp >= ? AND timestamp < ? AND open > 0 AND close > 0",
-                        [exchange, pid, granularity, start, end],
-                    ).fetchone()
-                    mean_vel = row[0] if row and row[0] is not None else 0.0
-            if mean_vel >= min_velocity:
-                filtered.append(sub)
+            pid = str(sub.get("product_id", "")).strip()
         except Exception:
-            pass
-    return filtered
+            continue
+        if not pid or "-" not in pid:
+            continue
+        base, quote = pid.split("-", 1)
+        if base in {"USD", "USDT", "EUR"} and quote in {"USD", "USDT", "EUR"}:
+            continue
+        result.append(sub)
+    return result
 
 
 def _stochastic_bag_sample(
@@ -706,6 +821,62 @@ def _stochastic_bag_sample(
     return list(selected)
 
 
+def _stochastic_span_bars(
+    total_bars: int,
+    model_size: int,
+    rng: random.Random,
+    *,
+    span_bars: int = STOCHASTIC_SPAN_LIMIT,
+) -> int:
+    """Choose a stochastic training span that scales with model size.
+
+    The default ceiling is 50 bars. Larger models may use proportionally
+    larger spans, but the selection stays stochastic and bounded instead of
+    expanding to a full archive window.
+    """
+    if total_bars <= 0:
+        return 0
+
+    base_limit = max(1, int(span_bars))
+    scale = {4: 1, 16: 2, 64: 4, 256: 8}.get(
+        model_size, max(1, int(model_size) // 4)
+    )
+    cap = min(total_bars, base_limit * scale)
+    floor = max(1, cap // 2)
+    if floor >= cap:
+        return cap
+    return rng.randint(floor, cap)
+
+
+def format_bash_expansion(products: List[str]) -> str:
+    """
+    Group products like ['BTC-USDT', 'ETH-USDT', 'ADA-BTC'] into a bash-style
+    expansion string such as '{BTC,ETH}-USDT,ADA-BTC'. This makes the bag
+    human-readable and compact in logs.
+    """
+    mapping = defaultdict(list)
+    for p in products:
+        try:
+            base, quote = p.split("-", 1)
+        except Exception:
+            # If unexpected format, fall back to raw string
+            mapping[""] .append(p)
+            continue
+        mapping[quote].append(base)
+
+    parts: List[str] = []
+    for quote, bases in mapping.items():
+        if quote == "":
+            # raw entries with no recognized quote
+            parts.extend(sorted(bases))
+            continue
+        if len(bases) > 1:
+            parts.append(f"{{{','.join(sorted(bases))}}}-{quote}")
+        else:
+            parts.append(f"{bases[0]}-{quote}")
+    return ",".join(parts)
+
+
 def run_autoresearch(
     db_path: str = "candles.duckdb",
     exchange: str = "binance",
@@ -713,6 +884,8 @@ def run_autoresearch(
     checkpoint_path: Optional[str] = None,
     training_db_path: Optional[str] = None,
     fixed_dim: Optional[int] = None,
+    min_partners: int = 3,
+    span_bars: int = STOCHASTIC_SPAN_LIMIT,
 ):
     import cache
 
@@ -755,44 +928,104 @@ def run_autoresearch(
     total_seconds = (db_max_ts - db_min_ts).total_seconds()
     total_bars = int(total_seconds / 300)
 
-    all_db_subscriptions = _list_all_exchange_subscriptions(db_path, exchange=exchange)
-    if not all_db_subscriptions and exchange == "binance":
-        print(
-            f"[Autoresearch] No Binance pairs found in {db_path}. Auto-absorbing MVP Binance Vision history..."
-        )
-        import binance_cache
-
-        # Load a quick default MVP bag for autoresearch
-        for pair in [
-            "BTC-USDT",
-            "ETH-USDT",
-            "SOL-USDT",
-            "XRP-USDT",
-            "ADA-USDT",
-            "DOGE-USDT",
-            "BNB-USDT",
-            "LTC-USDT",
-            "DOT-USDT",
-        ]:
-            binance_cache.fetch_binance_vision(db_path, pair, "300")
-        all_db_subscriptions = _list_all_exchange_subscriptions(
-            db_path, exchange=exchange
-        )
+    if exchange == "binance":
+        all_db_subscriptions = _bootstrap_binance_pair_universe(db_path)
+    else:
+        all_db_subscriptions = _list_all_exchange_subscriptions(db_path, exchange=exchange)
 
     if not all_db_subscriptions:
         print("[StochasticBag] ERROR: no pairs available")
         return
-    filtered_subscriptions = _compute_volatility_filter(
-        db_path,
-        all_db_subscriptions,
-        lookback_days=1095 if exchange == "binance" else 365,
-        granularity="300",
-        min_velocity=0.001,
-    )
-    filtered_pairs = [sub["product_id"] for sub in filtered_subscriptions]
+
+    sanitized_subscriptions = _sanitize_training_subscriptions(all_db_subscriptions)
+    filtered_pairs = [sub["product_id"] for sub in sanitized_subscriptions]
+    # Optionally require that currencies have at least `min_partners` partners
+    if min_partners and min_partners > 1:
+        adj = {}
+        for pid in list(filtered_pairs):
+            parts = pid.split("-", 1)
+            if len(parts) != 2:
+                continue
+            b, q = parts
+            adj.setdefault(b, set()).add(q)
+            adj.setdefault(q, set()).add(b)
+        coin_set = {c for c, p in adj.items() if len(p) >= min_partners}
+        partner_filtered = [pid for pid in filtered_pairs if (pid.split("-", 1)[0] in coin_set and pid.split("-", 1)[1] in coin_set)]
+        print(f"[StochasticBag] Applying min_partners={min_partners}: {len(filtered_pairs)} -> {len(partner_filtered)} pairs")
+        filtered_pairs = partner_filtered
     if not filtered_pairs:
-        print("[StochasticBag] ERROR: no pairs after filtering")
-        return
+        # Fallback: query cleaned pairs from DuckDB `pairs` table (no JSON/text files)
+        try:
+            with duckdb.connect(db_path, read_only=True) as conn:
+                rows = conn.execute("SELECT product_id FROM pairs WHERE product_id IS NOT NULL").fetchall()
+            fallback_candidates = [r[0] for r in rows if r and r[0] and "-" in r[0]]
+            # If DuckDB `pairs` table is empty or missing, try local cleaned list
+            if not fallback_candidates:
+                try:
+                    import json as _json, pathlib as _p
+
+                    cleaned = _p.Path("binance_pairs_cleaned.json")
+                    if cleaned.exists():
+                        data = _json.loads(cleaned.read_text())
+                        # prefer explicit pair fields, fall back to symbol/base+quote
+                        for item in data:
+                            pid = None
+                            if isinstance(item, dict):
+                                # Prefer explicit base/quote fields (they exist in cleaned JSON)
+                                b = item.get("base")
+                                q = item.get("quote")
+                                if b and q:
+                                    pid = f"{b}-{q}"
+                                else:
+                                    pid = item.get("pair") or item.get("symbol")
+                            if pid:
+                                # normalize symbol like BTCUSDT -> BTC-USDT if needed
+                                if "-" in pid:
+                                    fallback_candidates.append(pid)
+                                else:
+                                    # try to split bare symbol (no dash) using heuristic: last 3-5 chars as quote
+                                    sym = pid.upper()
+                                    if len(sym) >= 4:
+                                        # take last 3..5 chars heuristic
+                                        for L in (5, 4, 3):
+                                            if len(sym) > L:
+                                                base, quote = sym[:-L], sym[-L:]
+                                                if base.isalpha() and quote.isalpha():
+                                                    fallback_candidates.append(f"{base}-{quote}")
+                                                    break
+                        if fallback_candidates:
+                            print(f"[StochasticBag] Fallback: using {len(fallback_candidates)} pairs from local binance_pairs_cleaned.json")
+                except Exception:
+                    pass
+
+                # If we still have no candidates, try discovering symbols from
+                # data.binance.vision (falls back to Binance API internally).
+                if not fallback_candidates:
+                    try:
+                        from tools import import_binance_vision_pairs as _ibv
+
+                        symbols = _ibv.collect_remote_symbols(
+                            "https://data.binance.vision/?prefix=data/spot/monthly/klines/"
+                        )
+                        for sym in symbols:
+                            res = _ibv.split_symbol(sym)
+                            if res:
+                                fallback_candidates.append(f"{res[0]}-{res[1]}")
+                        if fallback_candidates:
+                            # dedupe and report
+                            fallback_candidates = list(dict.fromkeys(fallback_candidates))
+                            print(f"[StochasticBag] Fallback: using {len(fallback_candidates)} pairs discovered from data.binance.vision")
+                    except Exception:
+                        pass
+            if fallback_candidates:
+                filtered_pairs = fallback_candidates
+                print(f"[StochasticBag] Fallback: using {len(filtered_pairs)} pairs from DuckDB `pairs` table")
+            else:
+                print("[StochasticBag] ERROR: no pairs after filtering and no fallback available")
+                return
+        except Exception:
+            print("[StochasticBag] ERROR: no pairs after filtering and no fallback available")
+            return
 
     rng = random.Random()
     growth_idx, hidden_size, H_layers, L_layers, H_cycles, L_cycles, phase = (
@@ -826,7 +1059,6 @@ def run_autoresearch(
     try:
         while True:
             phase += 1
-            progress = min(1.0, phase / 200.0)
             selected_pairs = _stochastic_bag_sample(
                 filtered_pairs,
                 hidden_size,
@@ -834,39 +1066,25 @@ def run_autoresearch(
                 min_pairs=5,
                 max_pairs=len(filtered_pairs),
             )
-            window_bars = min(
-                rng.randint(
-                    max(
-                        500 if exchange == "binance" else 200,
-                        total_bars // (5 if exchange == "binance" else 20),
-                    ),
-                    max(
-                        max(
-                            500 if exchange == "binance" else 200,
-                            total_bars // (5 if exchange == "binance" else 20),
-                        ),
-                        int(
-                            max(
-                                500 if exchange == "binance" else 200,
-                                total_bars // (5 if exchange == "binance" else 20),
-                            )
-                            + (
-                                total_bars
-                                - max(
-                                    500 if exchange == "binance" else 200,
-                                    total_bars // (5 if exchange == "binance" else 20),
-                                )
-                            )
-                            * progress
-                        ),
-                    ),
-                ),
+            window_bars = _stochastic_span_bars(
                 total_bars,
+                hidden_size,
+                rng,
+                span_bars=span_bars,
             )
             window_seconds = window_bars * 300
             start_offset = rng.uniform(0, max(0, total_seconds - window_seconds))
             start_time = db_min_ts + timedelta(seconds=start_offset)
             end_time = start_time + timedelta(seconds=window_seconds)
+
+            if exchange == "binance":
+                _prefetch_binance_candles_window(
+                    db_path,
+                    selected_pairs,
+                    start_time,
+                    end_time,
+                    granularity="300",
+                )
 
             trial_graph = CoinGraph(fee_rate=0.001)
             trial_graph.load(
@@ -977,6 +1195,8 @@ def run_autoresearch(
                             _checkpoint_variant(checkpoint_path, "best"),
                             checkpoint_type=f"autoresearch_best_phase_{phase}",
                         )
+                bag_expansion = format_bash_expansion(selected_pairs)
+                print(f"  Log Bag: {bag_expansion}")
                 with duckdb.connect(experiments_db_path) as conn:
                     conn.execute(
                         "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase, model_cas) VALUES (now(), ?, ?, ?, ?, ?)",
@@ -994,13 +1214,7 @@ def run_autoresearch(
                                     "L_layers": L_layers,
                                 }
                             ),
-                            str(
-                                {
-                                    "n_pairs": len(selected_pairs),
-                                    "window_bars": window_bars,
-                                    "exchange": exchange,
-                                }
-                            ),
+                            bag_expansion,
                             growth_dim,
                             model.model_cas_signature(),
                         ],
@@ -1217,17 +1431,11 @@ class TrainingWorker:
         )
         if not all_subs:
             return
-        filtered = _compute_volatility_filter(
-            str(Config.DB_PATH),
-            all_subs,
-            lookback_days=1095,
-            granularity="300",
-            min_velocity=0.001,
-        )
-        if not filtered:
+        selected = _sanitize_training_subscriptions(all_subs)
+        if not selected:
             return
         selected_pairs = _stochastic_bag_sample(
-            [s["product_id"] for s in filtered], self.hidden_size, rng
+            [s["product_id"] for s in selected], self.hidden_size, rng
         )
 
         window_bars = min(10000, int(total_seconds / 300))
@@ -1455,11 +1663,22 @@ def main():
     parser.add_argument("--health", action="store_true")
 
     # Arguments
-    parser.add_argument("--exchange", default="binance")
+    parser.add_argument(
+        "--exchange",
+        default=None,
+        help="Exchange to use; defaults to binance for autoresearch and coinbase for finetune.",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--checkpoint-path", default="model_weights.pt")
     parser.add_argument("--training-db-path", default="training.duckdb")
     parser.add_argument("--dim", type=int, default=None)
+    parser.add_argument("--min-partners", type=int, default=3, help="Minimum number of partner currencies required for a coin to be included in stochastic bag sampling")
+    parser.add_argument(
+        "--span-bars",
+        type=int,
+        default=STOCHASTIC_SPAN_LIMIT,
+        help="Default stochastic span in bars; larger models can use larger spans.",
+    )
 
     parser.add_argument("--pretrained", default=None)
     parser.add_argument("--bag", default=None)
@@ -1476,24 +1695,28 @@ def main():
     ensure_pool_running(str(Config.DB_PATH))
 
     if args.autoresearch:
+        exchange = args.exchange or "binance"
         run_autoresearch(
             db_path=str(Config.DB_PATH),
-            exchange=args.exchange,
+            exchange=exchange,
             device=args.device,
             checkpoint_path=args.checkpoint_path,
             training_db_path=args.training_db_path,
             fixed_dim=args.dim,
+            min_partners=args.min_partners,
+            span_bars=args.span_bars,
         )
     elif args.finetune:
         if not args.pretrained or not args.bag:
             parser.error("--pretrained and --bag are required for --finetune")
+        exchange = args.exchange or "coinbase"
         finetune(
             pretrained_path=args.pretrained,
             bag_path=args.bag,
             output_path=args.output,
             learning_rate=args.lr,
             lookback_days=args.lookback_days,
-            exchange=args.exchange,
+            exchange=exchange,
             skip_fetch=True,
             device=args.device,
         )

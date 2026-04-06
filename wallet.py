@@ -192,6 +192,26 @@ class SimWallet:
                 )
                 return
 
+    def repost_open_orders(self, *, bar_idx: int, reason: str = "repost") -> int:
+        """Cancel all currently open (reserved) orders to allow re-posting new
+        orders each bar (non-GTC workflow). Returns the number of orders
+        cancelled.
+        """
+        cancelled = 0
+        # iterate over a copy of holdings to avoid mutation during iteration
+        for asset in list(self.holdings.keys()):
+            balance = self.balance(asset)
+            # copy list since cancel mutates order_list
+            for order in list(balance.order_list):
+                self.cancel(order, bar_idx=bar_idx, reason=reason)
+                cancelled += 1
+        if cancelled:
+            # clear caches and snapshot for visibility
+            self._worth_cache = None
+            self._route_cache = None
+            # No graph available here; caller may snapshot after placing new orders
+        return cancelled
+
     def _edge_row(self, graph: Any, edge: EdgeKey, bar_idx: int) -> Optional[Any]:
         if bar_idx < 0 or bar_idx >= len(getattr(graph, "common_timestamps", [])):
             return None
@@ -241,10 +261,48 @@ class SimWallet:
             balance = self.balance(asset)
             remaining: List[OrderShim] = []
             for order in balance.order_list:
+                # Attempt intrabar execution: if the bar's high/low crosses the
+                # order price, execute immediately using a realistic intrabar
+                # exit price. Otherwise, only settle when maturity_bar <= bar_idx.
+                row = self._edge_row(graph, order.edge, bar_idx)
+                open_p = high_p = low_p = close_p = 0.0
+                if row is not None and hasattr(graph, "edge_price_components"):
+                    comps = graph.edge_price_components(order.edge, row)
+                    open_p = _finite_float(comps.get("open", 0.0), 0.0)
+                    high_p = _finite_float(comps.get("high", 0.0), 0.0)
+                    low_p = _finite_float(comps.get("low", 0.0), 0.0)
+                    close_p = _finite_float(comps.get("close", 0.0), 0.0)
+                else:
+                    # fallback to close-only prices
+                    close_p = self.edge_price(graph, order.edge, bar_idx)
+                    open_p = high_p = low_p = close_p
+
+                executed = False
+                exit_price = close_p
+
+                # If intrabar price range touches the order price, treat as executed
                 if order.maturity_bar > bar_idx:
+                    # not yet matured; check intrabar triggers
+                    if order.is_buy:
+                        # buy executes if low <= order.price
+                        if low_p > 0.0 and low_p <= float(order.price):
+                            executed = True
+                            # use a conservative intrabar fill price similar to other codepaths
+                            exit_price = min(high_p, max(float(order.price), open_p))
+                    else:
+                        # sell executes if high >= order.price
+                        if high_p > 0.0 and high_p >= float(order.price):
+                            executed = True
+                            exit_price = max(low_p, min(float(order.price), open_p))
+                else:
+                    # matured: settle at close (or best available component)
+                    executed = True
+                    exit_price = close_p
+
+                if not executed:
                     remaining.append(order)
                     continue
-                exit_price = self.edge_price(graph, order.edge, bar_idx)
+
                 return_amt = self._settlement_amount(order, exit_price, fee_rate)
                 balance.free += return_amt
                 settled += 1
