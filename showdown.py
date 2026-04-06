@@ -897,7 +897,6 @@ def run_autoresearch(
     training_db_path: Optional[str] = None,
     fixed_dim: Optional[int] = None,
     min_partners: int = 3,
-    span_bars: int = STOCHASTIC_SPAN_LIMIT,
 ):
     import cache
 
@@ -1086,7 +1085,7 @@ def run_autoresearch(
                 total_bars,
                 hidden_size,
                 rng,
-                span_bars=span_bars,
+                span_bars=STOCHASTIC_SPAN_LIMIT,
             )
             window_seconds = window_bars * 300
             start_offset = rng.uniform(0, max(0, total_seconds - window_seconds))
@@ -1692,13 +1691,6 @@ def main():
     parser.add_argument("--training-db-path", default="training.duckdb")
     parser.add_argument("--dim", type=int, default=None)
     parser.add_argument("--min-partners", type=int, default=3, help="Minimum number of partner currencies required for a coin to be included in stochastic bag sampling")
-    parser.add_argument(
-        "--span-bars",
-        type=int,
-        default=STOCHASTIC_SPAN_LIMIT,
-        help="Default stochastic span in bars; larger models can use larger spans.",
-    )
-
     parser.add_argument("--pretrained", default=None)
     parser.add_argument("--bag", default=None)
     parser.add_argument("--output", default="model_weights_daytrade.pt")
@@ -1723,7 +1715,6 @@ def main():
             training_db_path=args.training_db_path,
             fixed_dim=args.dim,
             min_partners=args.min_partners,
-            span_bars=args.span_bars,
         )
     elif args.finetune:
         if not args.pretrained or not args.bag:
