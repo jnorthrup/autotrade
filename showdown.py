@@ -897,6 +897,7 @@ def run_autoresearch(
     training_db_path: Optional[str] = None,
     fixed_dim: Optional[int] = None,
     min_partners: int = 3,
+    bag_limit: int = STOCHASTIC_BAG_LIMIT,
 ):
     import cache
 
@@ -1063,12 +1064,14 @@ def run_autoresearch(
             seed_model.L_cycles,
         )
 
+    bag_cap = max(1, int(bag_limit))
     bag_target_preview = min(
         len(filtered_pairs),
         max(5, int(max(1, hidden_size)) * STOCHASTIC_BAG_PER_WIDTH),
+        bag_cap,
     )
     print(
-        f"\nAutoresearch: {len(filtered_pairs)} candidate pairs, stochastic bag target {bag_target_preview}, {total_bars} bars\nSquare Cube: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}"
+        f"\nAutoresearch: {len(filtered_pairs)} candidate pairs, stochastic bag target {bag_target_preview} (cap {bag_cap}), {total_bars} bars\nSquare Cube: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}"
     )
 
     try:
@@ -1079,7 +1082,7 @@ def run_autoresearch(
                 hidden_size,
                 rng,
                 min_pairs=5,
-                max_pairs=len(filtered_pairs),
+                max_pairs=bag_cap,
             )
             window_bars = _stochastic_span_bars(
                 total_bars,
@@ -1373,6 +1376,7 @@ class TrainingWorker:
         poll_interval: int = 60,
         lookback_days: int = 60,
         device: str = "cpu",
+        bag_limit: int = STOCHASTIC_BAG_LIMIT,
     ):
         (
             self.mode,
@@ -1382,6 +1386,7 @@ class TrainingWorker:
             self.poll_interval,
             self.lookback_days,
             self.device,
+            self.bag_limit,
         ) = (
             mode,
             worker_id,
@@ -1390,6 +1395,7 @@ class TrainingWorker:
             poll_interval,
             lookback_days,
             device,
+            bag_limit,
         )
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         Path("./logs").mkdir(parents=True, exist_ok=True)
@@ -1453,7 +1459,7 @@ class TrainingWorker:
             [s["product_id"] for s in selected],
             self.hidden_size,
             rng,
-            max_pairs=_stochastic_bag_limit(self.hidden_size),
+            max_pairs=_stochastic_bag_limit(self.hidden_size, self.bag_limit),
         )
 
         window_bars = min(10000, int(total_seconds / 300))
@@ -1691,6 +1697,12 @@ def main():
     parser.add_argument("--training-db-path", default="training.duckdb")
     parser.add_argument("--dim", type=int, default=None)
     parser.add_argument("--min-partners", type=int, default=3, help="Minimum number of partner currencies required for a coin to be included in stochastic bag sampling")
+    parser.add_argument(
+        "--bag-limit",
+        type=int,
+        default=STOCHASTIC_BAG_LIMIT,
+        help="Maximum stochastic bag size to sample; default is 50.",
+    )
     parser.add_argument("--pretrained", default=None)
     parser.add_argument("--bag", default=None)
     parser.add_argument("--output", default="model_weights_daytrade.pt")
@@ -1715,6 +1727,7 @@ def main():
             training_db_path=args.training_db_path,
             fixed_dim=args.dim,
             min_partners=args.min_partners,
+            bag_limit=args.bag_limit,
         )
     elif args.finetune:
         if not args.pretrained or not args.bag:
@@ -1734,7 +1747,10 @@ def main():
         if not args.mode:
             parser.error("--mode is required for --worker")
         TrainingWorker(
-            mode=args.mode, worker_id=args.worker_id, device=args.device
+            mode=args.mode,
+            worker_id=args.worker_id,
+            device=args.device,
+            bag_limit=args.bag_limit,
         ).run()
     elif args.orchestrator:
         run_orchestrator()
