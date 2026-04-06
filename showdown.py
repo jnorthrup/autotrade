@@ -714,6 +714,8 @@ def _bootstrap_binance_pair_universe(db_path: str) -> List[Dict[str, str]]:
                     if res:
                         source_pairs.append((res[0].upper(), res[1].upper()))
         if not source_pairs:
+            source_pairs = ibv.collect_exchangeinfo_pairs()
+        if not source_pairs:
             symbols = ibv.collect_remote_symbols(
                 "https://data.binance.vision/?prefix=data/spot/monthly/klines/"
             )
@@ -861,32 +863,12 @@ def _stochastic_span_bars(
 
 
 def format_bash_expansion(products: List[str]) -> str:
-    """
-    Group products like ['BTC-USDT', 'ETH-USDT', 'ADA-BTC'] into a bash-style
-    expansion string such as '{BTC,ETH}-USDT,ADA-BTC'. This makes the bag
-    human-readable and compact in logs.
-    """
-    mapping = defaultdict(list)
-    for p in products:
-        try:
-            base, quote = p.split("-", 1)
-        except Exception:
-            # If unexpected format, fall back to raw string
-            mapping[""] .append(p)
-            continue
-        mapping[quote].append(base)
+    """Render the selected bag in the order it was chosen.
 
-    parts: List[str] = []
-    for quote, bases in mapping.items():
-        if quote == "":
-            # raw entries with no recognized quote
-            parts.extend(sorted(bases))
-            continue
-        if len(bases) > 1:
-            parts.append(f"{{{','.join(sorted(bases))}}}-{quote}")
-        else:
-            parts.append(f"{bases[0]}-{quote}")
-    return ",".join(parts)
+    This is intentionally *not* sorted or grouped; stochastic selection should
+    be visible exactly as selected.
+    """
+    return "[" + " | ".join(str(p) for p in products) + "]" if products else "[]"
 
 
 def run_autoresearch(

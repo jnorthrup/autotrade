@@ -179,6 +179,36 @@ def collect_remote_symbols(base_url: str) -> List[str]:
         return []
 
 
+def collect_exchangeinfo_pairs() -> List[Tuple[str, str]]:
+    """Fetch Binance spot pairs directly from exchangeInfo.
+
+    This is the precise namespace fetch: it uses baseAsset/quoteAsset from the
+    API payload instead of trying to recover pairs from a symbol string.
+    """
+    try:
+        req = urllib.request.Request(
+            "https://api.binance.com/api/v3/exchangeInfo",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.load(resp)
+        pairs: List[Tuple[str, str]] = []
+        seen = set()
+        for s in data.get("symbols", []):
+            base = s.get("baseAsset") or s.get("base")
+            quote = s.get("quoteAsset") or s.get("quote")
+            if not base or not quote:
+                continue
+            pair = (str(base).upper(), str(quote).upper())
+            if pair in seen:
+                continue
+            seen.add(pair)
+            pairs.append(pair)
+        return pairs
+    except Exception:
+        return []
+
+
 def write_pairs_to_db(db_path: str, exchange: str, parsed_pairs: List[Tuple[str, str]]) -> int:
     if not parsed_pairs:
         print("No pairs to write")
@@ -263,6 +293,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         symbols = collect_local_symbols(args.local_dir)
         print(f"Found {len(symbols)} unique symbols in local dir")
     elif args.remote:
+        exchange_pairs = collect_exchangeinfo_pairs()
+        if exchange_pairs:
+            write_pairs_to_db(args.db_path, args.exchange, exchange_pairs)
+            return 0
         symbols = collect_remote_symbols(args.base_url)
         print(f"Discovered {len(symbols)} symbols from remote index / exchangeInfo")
     else:

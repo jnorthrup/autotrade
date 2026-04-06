@@ -1,5 +1,8 @@
+import io
+import json
 import random
 import unittest
+from unittest.mock import patch
 
 from showdown import (
     _stochastic_bag_limit,
@@ -7,6 +10,7 @@ from showdown import (
     _stochastic_span_bars,
     format_bash_expansion,
 )
+from tools import import_binance_vision_pairs as ibv
 
 
 class HighRNG:
@@ -52,8 +56,35 @@ class StochasticBagSpanTests(unittest.TestCase):
     def test_bag_contents_are_delineated(self):
         self.assertEqual(
             format_bash_expansion(["BTC-USDT", "ETH-USDT", "ADA-BTC"]),
-            "{BTC,ETH}-USDT,ADA-BTC",
+            "[BTC-USDT | ETH-USDT | ADA-BTC]",
         )
+
+    def test_exchangeinfo_pair_fetch_returns_real_pairs(self):
+        payload = {
+            "symbols": [
+                {"baseAsset": "BTC", "quoteAsset": "USDT"},
+                {"baseAsset": "ETH", "quoteAsset": "USDT"},
+            ]
+        }
+
+        class DummyResponse:
+            def __init__(self, data):
+                self._data = data
+
+            def read(self):
+                return self._data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("urllib.request.urlopen", return_value=DummyResponse(json.dumps(payload).encode("utf-8"))):
+            self.assertEqual(
+                ibv.collect_exchangeinfo_pairs(),
+                [("BTC", "USDT"), ("ETH", "USDT")],
+            )
 
 
 if __name__ == "__main__":
