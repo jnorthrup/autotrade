@@ -1084,6 +1084,7 @@ def run_autoresearch(
                 min_pairs=5,
                 max_pairs=bag_cap,
             )
+            bag_contents = format_bash_expansion(selected_pairs)
             window_bars = _stochastic_span_bars(
                 total_bars,
                 hidden_size,
@@ -1094,6 +1095,8 @@ def run_autoresearch(
             start_offset = rng.uniform(0, max(0, total_seconds - window_seconds))
             start_time = db_min_ts + timedelta(seconds=start_offset)
             end_time = start_time + timedelta(seconds=window_seconds)
+
+            print(f"  Stochastic bag contents: {bag_contents}")
 
             if exchange == "binance":
                 _prefetch_binance_candles_window(
@@ -1461,6 +1464,7 @@ class TrainingWorker:
             rng,
             max_pairs=_stochastic_bag_limit(self.hidden_size, self.bag_limit),
         )
+        print(f"  Stochastic bag contents: {format_bash_expansion(selected_pairs)}")
 
         window_bars = min(10000, int(total_seconds / 300))
         start_offset = rng.uniform(0, max(0, total_seconds - window_bars * 300))

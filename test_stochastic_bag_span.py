@@ -1,7 +1,12 @@
 import random
 import unittest
 
-from showdown import _stochastic_bag_limit, _stochastic_bag_sample, _stochastic_span_bars
+from showdown import (
+    _stochastic_bag_limit,
+    _stochastic_bag_sample,
+    _stochastic_span_bars,
+    format_bash_expansion,
+)
 
 
 class HighRNG:
@@ -43,6 +48,12 @@ class StochasticBagSpanTests(unittest.TestCase):
 
     def test_non_autoresearch_bag_cap_override(self):
         self.assertEqual(_stochastic_bag_limit(64, cap=12), 12)
+
+    def test_bag_contents_are_delineated(self):
+        self.assertEqual(
+            format_bash_expansion(["BTC-USDT", "ETH-USDT", "ADA-BTC"]),
+            "{BTC,ETH}-USDT,ADA-BTC",
+        )
 
 
 if __name__ == "__main__":
