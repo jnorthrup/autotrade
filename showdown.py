@@ -46,6 +46,8 @@ from wallet import OrderShim, SimWallet
 # --- Constants & Helpers ---
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
 STOCHASTIC_SPAN_LIMIT = 50
+STOCHASTIC_BAG_LIMIT = 50
+STOCHASTIC_BAG_PER_WIDTH = 5
 PLATEAU_WINDOW = 100
 PLATEAU_THRESHOLD = 1e-5
 PLATEAU_PATIENCE = 3
@@ -781,12 +783,13 @@ def _stochastic_bag_sample(
 ) -> List[str]:
     if not filtered_pairs:
         return []
-    target = {4: 5, 16: 20, 64: 40, 256: 80}.get(
-        model_size, max(min_pairs, model_size * 3 // 4)
+    target = max(
+        min_pairs,
+        int(max(1, model_size)) * STOCHASTIC_BAG_PER_WIDTH,
     )
     if max_pairs is not None:
         target = min(target, max_pairs)
-    target = max(min_pairs, min(target, len(filtered_pairs)))
+    target = min(target, len(filtered_pairs))
     adj = {}
     for pid in filtered_pairs:
         parts = pid.split("-", 1)
@@ -819,6 +822,15 @@ def _stochastic_bag_sample(
                 frontier.append(new_seed)
                 visited_currencies.add(new_seed)
     return list(selected)
+
+
+def _stochastic_bag_limit(model_size: int, cap: int = STOCHASTIC_BAG_LIMIT) -> int:
+    """Return the default bag cap for non-autoresearch flows.
+
+    The cap is 50 by default so worker-style training does not drift into
+    giant bags, but still keeps the bag stochastic and width-aware.
+    """
+    return min(max(1, int(cap)), max(1, int(model_size)) * STOCHASTIC_BAG_PER_WIDTH)
 
 
 def _stochastic_span_bars(
@@ -1052,8 +1064,12 @@ def run_autoresearch(
             seed_model.L_cycles,
         )
 
+    bag_target_preview = min(
+        len(filtered_pairs),
+        max(5, int(max(1, hidden_size)) * STOCHASTIC_BAG_PER_WIDTH),
+    )
     print(
-        f"\nAutoresearch: {len(filtered_pairs)} filtered pairs, {total_bars} bars\nSquare Cube: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}"
+        f"\nAutoresearch: {len(filtered_pairs)} candidate pairs, stochastic bag target {bag_target_preview}, {total_bars} bars\nSquare Cube: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}"
     )
 
     try:
@@ -1435,7 +1451,10 @@ class TrainingWorker:
         if not selected:
             return
         selected_pairs = _stochastic_bag_sample(
-            [s["product_id"] for s in selected], self.hidden_size, rng
+            [s["product_id"] for s in selected],
+            self.hidden_size,
+            rng,
+            max_pairs=_stochastic_bag_limit(self.hidden_size),
         )
 
         window_bars = min(10000, int(total_seconds / 300))
