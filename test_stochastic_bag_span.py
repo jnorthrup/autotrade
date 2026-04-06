@@ -62,8 +62,10 @@ class StochasticBagSpanTests(unittest.TestCase):
     def test_exchangeinfo_pair_fetch_returns_real_pairs(self):
         payload = {
             "symbols": [
-                {"baseAsset": "BTC", "quoteAsset": "USDT"},
-                {"baseAsset": "ETH", "quoteAsset": "USDT"},
+                {"baseAsset": "BTC", "quoteAsset": "USDT", "symbol": "BTCUSDT", "status": "TRADING", "isSpotTradingAllowed": True},
+                {"baseAsset": "ETH", "quoteAsset": "USDT", "symbol": "ETHUSDT", "status": "TRADING", "isSpotTradingAllowed": True},
+                {"baseAsset": "BTCUP", "quoteAsset": "USDT", "symbol": "BTCUPUSDT", "status": "TRADING", "isSpotTradingAllowed": True},
+                {"baseAsset": "JUP", "quoteAsset": "USDT", "symbol": "JUPUSDT", "status": "TRADING", "isSpotTradingAllowed": True},
             ]
         }
 
@@ -83,7 +85,7 @@ class StochasticBagSpanTests(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=DummyResponse(json.dumps(payload).encode("utf-8"))):
             self.assertEqual(
                 ibv.collect_exchangeinfo_pairs(),
-                [("BTC", "USDT"), ("ETH", "USDT")],
+                [("BTC", "USDT"), ("ETH", "USDT"), ("JUP", "USDT")],
             )
 
 

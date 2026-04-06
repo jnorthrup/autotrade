@@ -715,11 +715,6 @@ def _bootstrap_binance_pair_universe(db_path: str) -> List[Dict[str, str]]:
                         source_pairs.append((res[0].upper(), res[1].upper()))
         if not source_pairs:
             source_pairs = ibv.collect_exchangeinfo_pairs()
-        if not source_pairs:
-            symbols = ibv.collect_remote_symbols(
-                "https://data.binance.vision/?prefix=data/spot/monthly/klines/"
-            )
-            source_pairs = [res for sym in symbols if (res := ibv.split_symbol(sym))]
         if source_pairs:
             ibv.write_pairs_to_db(db_path, "binance", source_pairs)
     except Exception as exc:

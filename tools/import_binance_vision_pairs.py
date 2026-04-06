@@ -72,6 +72,28 @@ COMMON_QUOTES = {
 # Build suffix list, longest-first to prefer multi-letter matches like USDT
 SUFFIXES = sorted(list(STABLECOINS | FIAT_CODES | COMMON_QUOTES), key=lambda s: -len(s))
 
+LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "LEVERAGED", "ETF", "HEDGE")
+LEVERAGED_NUMERIC_SUFFIXES = ("3L", "3S", "4L", "4S", "5L", "5S")
+
+
+def _is_leveraged_or_etf_symbol(symbol: str, base: str) -> bool:
+    """Heuristically reject Binance leveraged token / ETF style symbols.
+
+    We keep short actual coin tickers like JUP; the filter only triggers on
+    longer derived-token families such as BTCUP, BTCDOWN, or 3L/3S suffixes.
+    """
+    symbol_u = (symbol or "").upper()
+    base_u = (base or "").upper()
+    if not symbol_u or not base_u:
+        return False
+    if len(base_u) > 4 and any(base_u.endswith(marker) for marker in LEVERAGED_SUFFIXES):
+        return True
+    if len(base_u) > 4 and any(base_u.endswith(marker) for marker in LEVERAGED_NUMERIC_SUFFIXES):
+        return True
+    if "LEVERAGED" in symbol_u or "ETF" in symbol_u:
+        return True
+    return False
+
 EXPECTED_PAIRS_SCHEMA = [
     ("exchange", "VARCHAR"),
     ("product_id", "VARCHAR"),
@@ -195,11 +217,21 @@ def collect_exchangeinfo_pairs() -> List[Tuple[str, str]]:
         pairs: List[Tuple[str, str]] = []
         seen = set()
         for s in data.get("symbols", []):
+            status = str(s.get("status", "")).upper()
+            if status != "TRADING":
+                continue
+            if not bool(s.get("isSpotTradingAllowed", True)):
+                continue
             base = s.get("baseAsset") or s.get("base")
             quote = s.get("quoteAsset") or s.get("quote")
             if not base or not quote:
                 continue
-            pair = (str(base).upper(), str(quote).upper())
+            base_u = str(base).upper()
+            quote_u = str(quote).upper()
+            symbol_u = str(s.get("symbol") or f"{base_u}{quote_u}").upper()
+            if _is_leveraged_or_etf_symbol(symbol_u, base_u):
+                continue
+            pair = (base_u, quote_u)
             if pair in seen:
                 continue
             seen.add(pair)
