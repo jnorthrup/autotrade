@@ -53,6 +53,10 @@ FIAT_CODES = {
     "VND",
 }
 
+# Site-specific prime fiat aliases that should be treated as fiat for
+# classification and routing (PBUSD is a local prime fiat token in some pools).
+FIAT_CODES.add("PBUSD")
+
 COMMON_QUOTES = {
     "BTC",
     "ETH",

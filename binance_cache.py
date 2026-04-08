@@ -3,11 +3,37 @@ import zipfile
 import io
 import pandas as pd
 from datetime import datetime
-import traceback
 import cache
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+from tools import import_binance_vision_pairs as pair_import
+
+
+def _query_month_row_count(
+    db_path: str,
+    pair: str,
+    granularity: str,
+    start_month: datetime,
+    next_month: datetime,
+):
+    sql = (
+        "SELECT COUNT(*) FROM candles "
+        "WHERE exchange = ? AND product_id = ? AND granularity = ? "
+        "AND timestamp >= ? AND timestamp < ?"
+    )
+    params = ["binance", pair, granularity, start_month, next_month]
+    if cache._use_pool_for_db(db_path):
+        rows = cache._pool().execute(sql, params)
+        return rows[0][0] if rows and rows[0] else 0
+
+    import duckdb as _duck
+
+    # Match the default connection configuration used elsewhere in-process.
+    with _duck.connect(db_path) as conn:
+        row = conn.execute(sql, params).fetchone()
+    return row[0] if row else 0
+
 
 def download_month(task):
     binance_pair, tunit, year, month = task
@@ -40,6 +66,7 @@ def fetch_binance_vision(
     start_time: datetime = None,
     end_time: datetime = None,
     max_workers: int = 6,
+    verbose: bool = False,
 ):
     """Fetch monthly Binance Vision klines for `pair` only for months overlapping
     the [start_time, end_time) window. Writes directly to the DuckDB via
@@ -74,42 +101,51 @@ def fetch_binance_vision(
     # Determine which months are already present in DB to skip re-download
     missing_months = []
     try:
-        import duckdb as _duck
-
-        conn = _duck.connect(db_path, read_only=True)
         for y, m in months:
             start_month = datetime(y, m, 1)
             if m == 12:
                 next_month = datetime(y + 1, 1, 1)
             else:
                 next_month = datetime(y, m + 1, 1)
-            row = conn.execute(
-                "SELECT COUNT(*) FROM candles WHERE exchange = ? AND product_id = ? AND granularity = ? AND timestamp >= ? AND timestamp < ?",
-                ["binance", pair, granularity, start_month, next_month],
-            ).fetchone()
-            if not row or row[0] == 0:
+            if _query_month_row_count(
+                db_path,
+                pair,
+                granularity,
+                start_month,
+                next_month,
+            ) == 0:
                 missing_months.append((y, m))
-        conn.close()
-    except Exception:
-        # If any DB error, default to trying all months
+    except Exception as exc:
+        print(
+            f"[Binance] WARNING: failed to probe cached months for {pair}: {exc}; "
+            "falling back to network fetch"
+        )
         missing_months = months
 
     if not missing_months:
-        print(f"No missing months to fetch for {pair}")
-        return
+        return {
+            "pair": pair,
+            "attempted_months": 0,
+            "missing_months": 0,
+            "got_any": True,
+        }
 
     tasks = [(binance_pair, tunit, y, m) for (y, m) in missing_months]
 
-    print(f"Fetching Binance Vision months for {pair} ({len(tasks)} months) covering {start.date()}..{end.date()}...")
+    if verbose:
+        print(
+            f"Fetching Binance Vision months for {pair} "
+            f"({len(tasks)} months) covering {start.date()}..{end.date()}..."
+        )
 
     save_lock = threading.Lock()
     got_any = False
+    saved_months = 0
+    missing_archives = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for df in pool.map(download_month, tasks):
             if df is None:
-                # missing month
-                sys.stdout.write("x")
-                sys.stdout.flush()
+                missing_archives += 1
                 continue
             got_any = True
             df["exchange"] = "binance"
@@ -121,17 +157,42 @@ def fetch_binance_vision(
             with save_lock:
                 try:
                     c.save_candles(rows)
-                except Exception:
-                    # best-effort: continue
-                    pass
-            sys.stdout.write(".")
-            sys.stdout.flush()
+                except Exception as exc:
+                    print(f"\n[Binance] WARNING: failed to save {pair} candles: {exc}")
+                    continue
+            saved_months += 1
 
-    print()
     if not got_any:
-        print("No data found for requested months.")
+        print(f"[Binance] no data found for requested months: {pair}")
+    elif verbose:
+        print(
+            f"[Binance] cached {pair}: saved {saved_months}/{len(tasks)} month(s)"
+            + (
+                f", missing {missing_archives}"
+                if missing_archives
+                else ""
+            )
+        )
+    return {
+        "pair": pair,
+        "attempted_months": len(tasks),
+        "missing_months": len(tasks),
+        "got_any": got_any,
+    }
+
+
+def mark_pair_unavailable(db_path: str, pair: str) -> int:
+    updated = pair_import.mark_pairs_keep(
+        db_path,
+        "binance",
+        [pair],
+        keep=False,
+    )
+    if updated:
+        print(f"[Binance] disabled pair with no Vision data: {pair}")
+    return updated
 
 if __name__ == "__main__":
     for pair in ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT", "BNB-USDT", "LTC-USDT", "DOT-USDT"]:
-        fetch_binance_vision("candles.duckdb", pair, "300")
+        fetch_binance_vision("candles.duckdb", pair, "300", verbose=True)
     print("Done!")

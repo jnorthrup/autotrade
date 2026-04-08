@@ -48,14 +48,21 @@ SQUARE_CUBE_SIZES = [4, 16, 64, 256]
 STOCHASTIC_SPAN_LIMIT = 50
 STOCHASTIC_BAG_LIMIT = 50
 STOCHASTIC_BAG_PER_WIDTH = 5
+AUTORESEARCH_Y_DEPTH_CHOICES = (100, 200, 300, 400)
+AUTORESEARCH_PREDICTION_DEPTH_CHOICES = (1, 2, 3, 5, 10)
 PLATEAU_WINDOW = 100
 PLATEAU_THRESHOLD = 1e-5
 PLATEAU_PATIENCE = 3
 WALK_FORWARD_VALIDATION_FRACTION = 0.2
 
+# Prime fiat handling: certain site-specific "prime" fiat tokens (e.g. PBUSD)
+# should be treated as first-class counter coins for routing and display.
+PRIME_FIAT_PREFERRED = ("PBUSD", "USD", "USDT", "USDC", "BUSD", "BTC", "ETH")
+PRIME_FIAT_SET = {"PBUSD"}
+
 
 def _choose_value_asset(graph: CoinGraph) -> str:
-    for asset in ("USD", "USDT", "USDC", "BTC", "ETH"):
+    for asset in PRIME_FIAT_PREFERRED:
         if asset in getattr(graph, "nodes", set()):
             return asset
     nodes = sorted(getattr(graph, "nodes", set()))
@@ -264,6 +271,23 @@ def _training_status(total_loss: float, n_updates: int) -> str:
         if n_updates > 0
         else "no scored updates; warmup or maturity never completed"
     )
+
+
+def _autoresearch_min_window_bars(
+    y_depth: Optional[int] = None,
+    prediction_depth: Optional[int] = None,
+) -> int:
+    target_y_depth = int(
+        y_depth if y_depth is not None else max(AUTORESEARCH_Y_DEPTH_CHOICES)
+    )
+    target_prediction_depth = int(
+        prediction_depth
+        if prediction_depth is not None
+        else max(AUTORESEARCH_PREDICTION_DEPTH_CHOICES)
+    )
+    min_train_bars = max(target_y_depth + target_prediction_depth + 64, 256)
+    min_validation_bars = max(target_prediction_depth + 32, 64)
+    return min_train_bars + min_validation_bars
 
 
 def plan_walk_forward_split(
@@ -653,6 +677,43 @@ def _list_all_exchange_subscriptions(
         return []
 
 
+def _product_ids_with_window_data(
+    db_path: str,
+    exchange: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> List[str]:
+    sql = """
+        SELECT DISTINCT product_id
+        FROM candles
+        WHERE exchange = ?
+          AND timestamp >= ?
+          AND timestamp <= ?
+          AND product_id LIKE '%-%'
+    """
+    params = [exchange, start_time, end_time]
+    try:
+        if _use_pool_for_db(db_path):
+            rows = _pool().execute(sql, params)
+        else:
+            with duckdb.connect(db_path, read_only=True) as conn:
+                rows = conn.execute(sql, params).fetchall()
+    except Exception:
+        return []
+
+    product_ids: List[str] = []
+    seen: set = set()
+    for row in rows:
+        if not row:
+            continue
+        product_id = str(row[0] or "").strip()
+        if not product_id or product_id in seen:
+            continue
+        seen.add(product_id)
+        product_ids.append(product_id)
+    return product_ids
+
+
 def _list_pairs_table_subscriptions(
     db_path: str, exchange: Optional[str] = None
 ) -> List[Dict[str, str]]:
@@ -850,8 +911,9 @@ def _stochastic_span_bars(
     scale = {4: 1, 16: 2, 64: 4, 256: 8}.get(
         model_size, max(1, int(model_size) // 4)
     )
-    cap = min(total_bars, base_limit * scale)
-    floor = max(1, cap // 2)
+    min_window_bars = _autoresearch_min_window_bars()
+    cap = min(total_bars, max(base_limit * scale, min_window_bars))
+    floor = max(1, min_window_bars, cap // 2)
     if floor >= cap:
         return cap
     return rng.randint(floor, cap)
@@ -863,7 +925,43 @@ def format_bash_expansion(products: List[str]) -> str:
     This is intentionally *not* sorted or grouped; stochastic selection should
     be visible exactly as selected.
     """
-    return "[" + " | ".join(str(p) for p in products) + "]" if products else "[]"
+    if not products:
+        return "[]"
+
+    # Group by base asset while preserving the order in which bases and
+    # quotes were encountered. We only render brace-style expansions when a
+    # base has multiple quotes or when the quote is a configured prime fiat
+    # (e.g. PBUSD) which the user expects to be emphasized.
+    bases_order: List[str] = []
+    quotes_for_base: Dict[str, List[str]] = {}
+    for p in products:
+        s = str(p)
+        if "-" not in s:
+            # preserve raw token
+            bases_order.append(s)
+            quotes_for_base.setdefault(s, [])
+            continue
+        base, quote = s.split("-", 1)
+        if base not in quotes_for_base:
+            bases_order.append(base)
+            quotes_for_base[base] = []
+        if quote not in quotes_for_base[base]:
+            quotes_for_base[base].append(quote)
+
+    parts: List[str] = []
+    for base in bases_order:
+        quotes = quotes_for_base.get(base, [])
+        if not quotes:
+            parts.append(base)
+            continue
+        # Render braces if multiple quotes, or if the single quote is a prime fiat
+        if len(quotes) > 1 or any(q in PRIME_FIAT_SET for q in quotes):
+            inner = " | ".join(quotes)
+            parts.append(f"{base}-{{{inner}}}")
+        else:
+            parts.append(f"{base}-{quotes[0]}")
+
+    return "[" + " | ".join(parts) + "]"
 
 
 def run_autoresearch(
@@ -918,9 +1016,20 @@ def run_autoresearch(
     total_bars = int(total_seconds / 300)
 
     if exchange == "binance":
-        all_db_subscriptions = _bootstrap_binance_pair_universe(db_path)
+        # Training should prefer symbols that already have candle history.
+        # Falling back to the full pairs catalog makes the stochastic bag
+        # sample newly-listed or sparse products that cannot support the
+        # randomly chosen window, which then devolves into empty graphs and
+        # repeated no-data fetch attempts.
+        all_db_subscriptions = _list_all_exchange_subscriptions(
+            db_path, exchange=exchange
+        )
+        if not all_db_subscriptions:
+            all_db_subscriptions = _bootstrap_binance_pair_universe(db_path)
     else:
-        all_db_subscriptions = _list_all_exchange_subscriptions(db_path, exchange=exchange)
+        all_db_subscriptions = _list_all_exchange_subscriptions(
+            db_path, exchange=exchange
+        )
 
     if not all_db_subscriptions:
         print("[StochasticBag] ERROR: no pairs available")
@@ -941,7 +1050,13 @@ def run_autoresearch(
         coin_set = {c for c, p in adj.items() if len(p) >= min_partners}
         partner_filtered = [pid for pid in filtered_pairs if (pid.split("-", 1)[0] in coin_set and pid.split("-", 1)[1] in coin_set)]
         print(f"[StochasticBag] Applying min_partners={min_partners}: {len(filtered_pairs)} -> {len(partner_filtered)} pairs")
-        filtered_pairs = partner_filtered
+        if partner_filtered:
+            filtered_pairs = partner_filtered
+        else:
+            print(
+                "[StochasticBag] WARNING: min_partners filter removed all cached pairs; "
+                "continuing with the unfiltered candle-backed universe"
+            )
     if not filtered_pairs:
         # Fallback: query cleaned pairs from DuckDB `pairs` table (no JSON/text files)
         try:
@@ -1054,14 +1169,6 @@ def run_autoresearch(
     try:
         while True:
             phase += 1
-            selected_pairs = _stochastic_bag_sample(
-                filtered_pairs,
-                hidden_size,
-                rng,
-                min_pairs=5,
-                max_pairs=bag_cap,
-            )
-            bag_contents = format_bash_expansion(selected_pairs)
             window_bars = _stochastic_span_bars(
                 total_bars,
                 hidden_size,
@@ -1072,6 +1179,27 @@ def run_autoresearch(
             start_offset = rng.uniform(0, max(0, total_seconds - window_seconds))
             start_time = db_min_ts + timedelta(seconds=start_offset)
             end_time = start_time + timedelta(seconds=window_seconds)
+            window_product_ids = set(
+                _product_ids_with_window_data(db_path, exchange, start_time, end_time)
+            )
+            window_pairs = [
+                pid
+                for pid in filtered_pairs
+                if pid in window_product_ids
+            ]
+            if len(window_pairs) < 5:
+                print(
+                    f"  Window rejected: only {len(window_pairs)}/5 pairs with local data"
+                )
+                continue
+            selected_pairs = _stochastic_bag_sample(
+                window_pairs,
+                hidden_size,
+                rng,
+                min_pairs=5,
+                max_pairs=bag_cap,
+            )
+            bag_contents = format_bash_expansion(selected_pairs)
 
             print(f"  Stochastic bag contents: {bag_contents}")
 
@@ -1102,10 +1230,10 @@ def run_autoresearch(
 
             lr, y_depth, x_pixels, curvature, prediction_depth = (
                 10 ** random.uniform(-4, -1.5),
-                random.choice([100, 200, 300, 400]),
+                random.choice(AUTORESEARCH_Y_DEPTH_CHOICES),
                 random.choice([10, 15, 20, 30]),
                 random.uniform(0.5, 4.0),
-                random.choice([1, 2, 3, 5, 10]),
+                random.choice(AUTORESEARCH_PREDICTION_DEPTH_CHOICES),
             )
             print(
                 f"\n=== Phase {phase} ===\n  Square: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}\n  Bag: {len(selected_pairs)} pairs, {window_bars} bars"

@@ -45,10 +45,55 @@ def load_cleaned(path: Path):
 def load_pairs_from_db(db_path: Path, exchange: Optional[str] = None):
     try:
         conn = duckdb.connect(str(db_path))
-        if exchange:
-            rows = conn.execute("SELECT base, quote FROM pairs WHERE exchange = ? AND product_id IS NOT NULL", [exchange]).fetchall()
-        else:
-            rows = conn.execute("SELECT base, quote FROM pairs WHERE product_id IS NOT NULL").fetchall()
+        try:
+            if exchange:
+                rows = conn.execute(
+                    """
+                    SELECT p.base, p.quote
+                    FROM pairs AS p
+                    LEFT JOIN coins AS base_coin
+                      ON base_coin.exchange = p.exchange
+                     AND base_coin.asset = p.base
+                    LEFT JOIN coins AS quote_coin
+                      ON quote_coin.exchange = p.exchange
+                     AND quote_coin.asset = p.quote
+                    WHERE p.exchange = ?
+                      AND p.product_id IS NOT NULL
+                      AND COALESCE(p.keep, TRUE)
+                      AND NOT COALESCE(base_coin.shitlisted, FALSE)
+                      AND NOT COALESCE(quote_coin.shitlisted, FALSE)
+                    """,
+                    [exchange],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT p.base, p.quote
+                    FROM pairs AS p
+                    LEFT JOIN coins AS base_coin
+                      ON base_coin.exchange = p.exchange
+                     AND base_coin.asset = p.base
+                    LEFT JOIN coins AS quote_coin
+                      ON quote_coin.exchange = p.exchange
+                     AND quote_coin.asset = p.quote
+                    WHERE p.product_id IS NOT NULL
+                      AND COALESCE(p.keep, TRUE)
+                      AND NOT COALESCE(base_coin.shitlisted, FALSE)
+                      AND NOT COALESCE(quote_coin.shitlisted, FALSE)
+                    """
+                ).fetchall()
+        except Exception:
+            if exchange:
+                rows = conn.execute(
+                    "SELECT base, quote FROM pairs "
+                    "WHERE exchange = ? AND product_id IS NOT NULL AND COALESCE(keep, TRUE)",
+                    [exchange],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT base, quote FROM pairs "
+                    "WHERE product_id IS NOT NULL AND COALESCE(keep, TRUE)"
+                ).fetchall()
         conn.close()
         return [(r[0].upper(), r[1].upper()) for r in rows if r and r[0] and r[1]]
     except Exception:

@@ -1242,9 +1242,14 @@ class CoinGraph:
             valid_pairs.append(f"{ex}:{pid}")
 
         self.all_pairs = valid_pairs
-        if "USD" in self.nodes:
-            self.nodes.discard("USD")
-            self.nodes = {"USD"} | self.nodes
+        # Preferentially surface prime fiat nodes so routing and wallet
+        # initialization can pick them as value assets (e.g. PBUSD).
+        PRIME_ORDER = ("PBUSD", "USD", "USDT", "USDC", "BUSD")
+        found_primes = [p for p in PRIME_ORDER if p in self.nodes]
+        if found_primes:
+            for p in found_primes:
+                self.nodes.discard(p)
+            self.nodes = set(found_primes) | self.nodes
         self._align_timestamps()
         return len(self.common_timestamps)
 
