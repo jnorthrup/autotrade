@@ -255,9 +255,9 @@ class HRMEdgePredictor(nn.Module):
         self.register_buffer("H_init", trunc_normal_init_(torch.empty(hidden_size, dtype=torch.float32), 1), persistent=True)
         self.register_buffer("L_init", trunc_normal_init_(torch.empty(hidden_size, dtype=torch.float32), 1), persistent=True)
 
-        self.fraction_head = nn.Linear(hidden_size, 1)
+        self.fraction_head = nn.Linear(hidden_size, 1)  # sigmoid → magnitude [0, 1]
         self.ptt_head = nn.Linear(hidden_size, 1)
-        self.bid_head = nn.Linear(hidden_size, 1)
+        self.bid_head = nn.Linear(hidden_size, 1)       # tanh → direction [-1, 1]
         self.sl_head = nn.Linear(hidden_size, 1)
         # Xavier init for heads so random weights produce nonzero signals from bar 1.
         # Zero-init backbone is fine; heads must break symmetry immediately.
@@ -315,9 +315,9 @@ class HRMEdgePredictor(nn.Module):
 
         z = z_H.squeeze(1)
         return (
-            torch.tanh(self.fraction_head(z)).squeeze(-1),
+            torch.sigmoid(self.fraction_head(z)).squeeze(-1),   # magnitude [0, 1]
             torch.sigmoid(self.ptt_head(z)).squeeze(-1),
-            torch.tanh(self.bid_head(z)).squeeze(-1),
+            torch.tanh(self.bid_head(z)).squeeze(-1),            # direction [-1, 1]
             torch.sigmoid(self.sl_head(z)).squeeze(-1),
             HRMEdgeCarry(z_H=z_H.detach(), z_L=z_L.detach()),
         )
@@ -545,7 +545,47 @@ class HierarchicalReasoningModel:
         rng = self._rng if self.stochastic_fisheye else None
         boundaries = stochastic_fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature, rng)
         values = fisheye_sample(closes[-self.y_depth:], boundaries)[:self.x_pixels]
-        return values + [0.0] * (self.x_pixels - len(values))
+
+        # Augment with OHLCV features from kline_view (volume, wicks, velocity, wallet state)
+        # This gives the model visibility into candle structure, not just closes.
+        ohlcv_features = self._get_ohlcv_features(edge, bar_idx)
+        combined = values + ohlcv_features
+        # Pad or truncate to x_pixels (the PancakeEmbedding expects fixed size)
+        if len(combined) < self.x_pixels:
+            combined += [0.0] * (self.x_pixels - len(combined))
+        return combined[:self.x_pixels]
+
+    def _get_ohlcv_features(self, edge: Tuple[str, ...], bar_idx: int) -> List[float]:
+        """Extract OHLCV + bar features from kline_view data.
+
+        Returns a fixed-size feature vector for the current bar:
+        [velocity, range, upper_wick, lower_wick, body, volume, is_live,
+         free_base, free_quote, locked_base, locked_quote]  (11 features)
+        """
+        view = self._kline_view.get(edge)
+        is_live = self._kline_live.get(edge, False)
+        if not view:
+            return [0.0] * 11
+
+        features = []
+        # Bar-level features (current bar, rowIndex=0 in kline_view output)
+        features.append(float(view.get("velocity", 0.0)))
+        features.append(float(view.get("range", 0.0)))
+        features.append(float(view.get("upper_wick", 0.0)))
+        features.append(float(view.get("lower_wick", 0.0)))
+        features.append(float(view.get("body", 0.0)))
+        # Volume normalized by typical scale
+        vol = float(view.get("volume", 0.0))
+        features.append(vol / max(1e-30, abs(vol) + 1.0))  # soft normalization
+        features.append(1.0 if is_live else 0.0)
+
+        # Wallet state features (if available)
+        features.append(float(view.get("free_base", 0.0)))
+        features.append(float(view.get("free_quote", 0.0)))
+        features.append(float(view.get("locked_base", 0.0)))
+        features.append(float(view.get("locked_quote", 0.0)))
+
+        return features
 
     def _bag_one_hot(self, active_edges: List[Tuple[str, ...]]) -> Tensor:
         """Build bag slot one-hot: which edges in the bag are active this bar.
@@ -742,12 +782,15 @@ class HierarchicalReasoningModel:
         if not self.edge_names or self._model is None or self._optimizer is None or hit_ptt is None or hit_stop is None or (bar_idx >= 0 and self._last_price_bar_idx != bar_idx): return None
         prep_start = time.perf_counter() if self._profile_enabled else None
         matured_edges, fisheye_rows, carry_rows, velocity_targets = [], [], [],[]
+        fee_rate = float(getattr(graph, 'fee_rate', 0.001))
         for edge in actual_accels:
             frame = self._matured_prediction_frame(edge, graph)
             if not frame: continue
             closes_e = self._get_closes(graph, edge, bar_idx)
             obs_count = self._obs_count(graph, edge, bar_idx)
-            vel = ((float(closes_e[-1]) / frame.get('start_price', 1.0)) - 1.0) / max(1, obs_count - frame['observation_count']) if frame.get('start_price', 0) > 0 and len(closes_e) > 0 else 0.0
+            raw_vel = ((float(closes_e[-1]) / frame.get('start_price', 1.0)) - 1.0) / max(1, obs_count - frame['observation_count']) if frame.get('start_price', 0) > 0 and len(closes_e) > 0 else 0.0
+            # Net-of-fee: direction-agnostic velocity minus round-trip fee cost
+            vel = raw_vel - fee_rate  # even winning trades must overcome fees
             matured_edges.append(edge); fisheye_rows.append(frame['fisheye']); carry_rows.append(frame['carry']); velocity_targets.append(vel)
         if not matured_edges: return None
         fisheye_batch, velocities_tensor = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device), torch.as_tensor(np.asarray(velocity_targets, dtype=np.float32), device=self._device)
@@ -759,9 +802,10 @@ class HierarchicalReasoningModel:
         self._optimizer.zero_grad(set_to_none=True)
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
-        # Fraction is position size (tanh); bid is direction (tanh, +buy/-sell); tpp/sl are event heads.
+        # Fraction is magnitude (sigmoid [0,1]); bid is direction (tanh [-1,1]).
+        # allocation = bid * fraction → signed position: +fraction for buy, -fraction for sell
         pred_fraction, pred_tpp, pred_bid, pred_sl, _ = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, carry_batch, time_feat, bag_oh)
-        allocations = pred_bid * torch.abs(pred_fraction)
+        allocations = pred_bid * pred_fraction  # no abs needed — fraction already [0,1]
 
         hit_ptt_tensor = torch.as_tensor(
             np.asarray([1.0 if hit_ptt.get(edge, False) else 0.0 for edge in matured_edges], dtype=np.float32),

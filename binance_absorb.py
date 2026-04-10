@@ -1,6 +1,7 @@
 import urllib.request
 import zipfile
 import io
+import logging
 import pandas as pd
 from datetime import datetime
 import traceback
@@ -8,6 +9,8 @@ import cache
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger(__name__)
 
 def download_month(task):
     binance_pair, tunit, year, month = task
@@ -32,11 +35,11 @@ def fetch_binance_vision(db_path: str, pair: str = "BTC-USDT", granularity: str 
     tunit = "5m" if granularity == "300" else "1m"
     start_year = 2017
     end_year = datetime.now().year
-    
-    print(f"Absorbing Binance Vision for {pair} {tunit}...")
-    
+
+    logger.info("Absorbing Binance Vision for %s %s...", pair, tunit)
+
     tasks = [(binance_pair, tunit, y, m) for y in range(start_year, end_year + 1) for m in range(1, 13)]
-    
+
     all_dfs = []
     with ThreadPoolExecutor(max_workers=10) as pool:
         for df in pool.map(download_month, tasks):
@@ -52,12 +55,14 @@ def fetch_binance_vision(db_path: str, pair: str = "BTC-USDT", granularity: str 
     print()
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-        print(f"Saving {len(final_df)} candles to {db_path}...")
+        logger.info("Saving %d candles to %s...", len(final_df), db_path)
         c.save_candles(final_df)
     else:
-        print("No data found.")
+        logger.warning("No data found.")
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    setup_logging(level="DEBUG")
     for pair in ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT", "BNB-USDT", "LTC-USDT", "DOT-USDT"]:
         fetch_binance_vision("candles.duckdb", pair, "300")
-    print("Done!")
+    logger.info("Done!")

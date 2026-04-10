@@ -241,7 +241,15 @@ class SimWallet:
             self.snapshot(graph, bar_idx=bar_idx, label=label)
         return created
 
-    def settle_due_orders(self, graph: Any, *, bar_idx: int, fee_rate: float) -> Dict[str, Any]:
+    def settle_due_orders(self, graph: Any, *, bar_idx: int, fee_rate: float, spread_rate: float = 0.0002) -> Dict[str, Any]:
+        """Settle matured orders with realistic execution model.
+
+        Args:
+            graph: CoinGraph with OHLCV data.
+            bar_idx: Current bar index.
+            fee_rate: Trading fee rate (e.g., 0.001 for 0.1%).
+            spread_rate: Bid-ask spread as fraction of price (default 0.0002 = 0.02%).
+        """
         worth_before = self.worth(graph, bar_idx)
         settled = 0
         for asset in list(self.holdings.keys()):
@@ -252,13 +260,14 @@ class SimWallet:
                 # order price, execute immediately using a realistic intrabar
                 # exit price. Otherwise, only settle when maturity_bar <= bar_idx.
                 row = self._edge_row(graph, order.edge, bar_idx)
-                open_p = high_p = low_p = close_p = 0.0
+                open_p = high_p = low_p = close_p = vol_p = 0.0
                 if row is not None and hasattr(graph, "edge_price_components"):
                     comps = graph.edge_price_components(order.edge, row)
                     open_p = _finite_float(comps.get("open", 0.0), 0.0)
                     high_p = _finite_float(comps.get("high", 0.0), 0.0)
                     low_p = _finite_float(comps.get("low", 0.0), 0.0)
                     close_p = _finite_float(comps.get("close", 0.0), 0.0)
+                    vol_p = _finite_float(row.get("volume", 0.0), 0.0)
                 else:
                     # fallback to close-only prices
                     close_p = self.edge_price(graph, order.edge, bar_idx)
@@ -289,6 +298,29 @@ class SimWallet:
                 if not executed:
                     remaining.append(order)
                     continue
+
+                # --- Realistic execution: bid-ask spread + volume cap + market impact ---
+                spread = max(0.0, float(spread_rate))
+                if order.is_buy:
+                    # Buy at ask: price is higher than close
+                    exit_price = exit_price * (1.0 + spread / 2.0)
+                else:
+                    # Sell at bid: price is lower than close
+                    exit_price = exit_price * (1.0 - spread / 2.0)
+
+                # Volume-capped fills: cap order as fraction of bar volume
+                # Default: max 5% of bar volume to avoid unrealistic fills
+                max_fill_pct = 0.05
+                if vol_p > 0 and hasattr(order, 'amt'):
+                    max_fill_amt = float(vol_p) * max_fill_pct
+                    if float(order.amt) > max_fill_amt:
+                        # Partial fill: execute at capped size with extra slippage
+                        slippage_bps = (float(order.amt) / max(1e-30, float(vol_p))) * 10.0  # 10 bps per 1% of volume
+                        if order.is_buy:
+                            exit_price *= (1.0 + slippage_bps / 10000.0)
+                        else:
+                            exit_price *= (1.0 - slippage_bps / 10000.0)
+                        order.amt = max_fill_amt  # cap the fill size
 
                 _, base_asset, quote_asset = _parse_edge(order.edge)
 

@@ -42,6 +42,9 @@ from cache import (
 )
 from model import HierarchicalReasoningModel
 from wallet import OrderShim, SimWallet
+from logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 # --- Constants & Helpers ---
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
@@ -59,6 +62,491 @@ WALK_FORWARD_VALIDATION_FRACTION = 0.2
 # should be treated as first-class counter coins for routing and display.
 PRIME_FIAT_PREFERRED = ("PBUSD", "USD", "USDT", "USDC", "BUSD", "BTC", "ETH")
 PRIME_FIAT_SET = {"PBUSD"}
+
+# CMC scoring: restricted expression evaluator (TODO 9)
+_CMC_SAFE_FUNCS = {
+    "min": min,
+    "max": max,
+    "abs": abs,
+    "log": __import__("math").log,
+    "pow": pow,
+    "sqrt": __import__("math").sqrt,
+}
+
+
+def _evaluate_cmc_score(expression: str, row: dict) -> float:
+    """Evaluate a CMC scoring expression with restricted builtins.
+
+    Only allows: min, max, abs, log, pow, sqrt + row keys as variables.
+    """
+    safe_globals = {"__builtins__": {}}
+    safe_globals.update(_CMC_SAFE_FUNCS)
+    safe_globals.update(row)
+    return float(eval(expression, safe_globals))  # noqa: S307 — restricted globals
+
+
+def _apply_cmc_filters(
+    pairs: List[str],
+    conn,
+    min_rank: Optional[int] = None,
+    min_volume_24h: Optional[float] = None,
+    min_mcap: Optional[float] = None,
+    min_volatility: Optional[float] = None,
+    max_volatility: Optional[float] = None,
+    sort_key: Optional[str] = None,
+    score_expression: Optional[str] = None,
+    preset: Optional[str] = None,
+) -> List[str]:
+    """Filter pairs by CMC data. Returns filtered pair list.
+
+    Args:
+        pairs: List of "BASE-QUOTE" pair strings.
+        conn: DuckDB connection with cmc_rankings table.
+        min_rank: Maximum CMC rank (lower = better).
+        min_volume_24h: Minimum 24h volume in USD.
+        min_mcap: Minimum market cap in USD.
+        min_volatility: Minimum |percent_change_24h|.
+        max_volatility: Maximum |percent_change_24h|.
+        sort_key: Column to sort by (e.g. "rank", "volume_24h", "market_cap").
+        score_expression: Custom scoring expression to evaluate and sort by.
+        preset: One of: liquid, volatile, stable, trending, emerging, bluechip.
+    """
+    # Extract unique symbols from pairs
+    symbols = set()
+    for p in pairs:
+        parts = p.split("-", 1)
+        symbols.add(parts[0])
+        if len(parts) > 1:
+            symbols.add(parts[1])
+
+    # Query CMC data
+    placeholders = ",".join(["?"] * len(symbols))
+    query = f"SELECT * FROM cmc_rankings WHERE symbol IN ({placeholders})"
+    try:
+        rows = conn.execute(query, list(symbols)).fetchall()
+    except Exception as exc:
+        logger.warning("CMC rankings table unavailable, skipping CMC filters: %s", exc)
+        return pairs
+
+    if not rows:
+        logger.warning("No CMC data found for requested symbols")
+        return pairs
+
+    col_names = [desc[0] for desc in conn.execute(f"SELECT * FROM cmc_rankings LIMIT 0").description]
+    cmc_map = {}
+    for row in rows:
+        d = dict(zip(col_names, row))
+        cmc_map[d["symbol"]] = d
+
+    # Apply presets
+    if preset:
+        presets = {
+            "liquid": {"min_volume_24h": 10_000_000, "min_mcap": 100_000_000},
+            "volatile": {"min_volatility": 5.0},
+            "stable": {"max_volatility": 2.0},
+            "trending": {"min_rank": 50, "min_volatility": 1.0},
+            "emerging": {"min_rank": 200, "max_volatility": 20.0},
+            "bluechip": {"min_rank": 20, "min_volume_24h": 50_000_000},
+        }
+        if preset in presets:
+            preset_args = presets[preset]
+            if min_rank is None:
+                min_rank = preset_args.get("min_rank")
+            if min_volume_24h is None:
+                min_volume_24h = preset_args.get("min_volume_24h")
+            if min_mcap is None:
+                min_mcap = preset_args.get("min_mcap")
+            if min_volatility is None:
+                min_volatility = preset_args.get("min_volatility")
+            if max_volatility is None:
+                max_volatility = preset_args.get("max_volatility")
+
+    # Filter pairs: keep if BOTH base and quote pass filters
+    def _passes_cmc(symbol: str) -> bool:
+        data = cmc_map.get(symbol)
+        if data is None:
+            return True  # No CMC data = pass through
+        if min_rank is not None and data.get("rank", 9999) > min_rank:
+            return False
+        if min_volume_24h is not None and data.get("volume_24h", 0) < min_volume_24h:
+            return False
+        if min_mcap is not None and data.get("market_cap", 0) < min_mcap:
+            return False
+        vol = abs(data.get("percent_change_24h", 0))
+        if min_volatility is not None and vol < min_volatility:
+            return False
+        if max_volatility is not None and vol > max_volatility:
+            return False
+        return True
+
+    filtered = [
+        p for p in pairs
+        if all(_passes_cmc(s) for s in p.split("-", 1))
+    ]
+
+    # Scoring and sorting
+    if score_expression:
+        def _pair_score(pair: str) -> float:
+            symbols_in_pair = pair.split("-", 1)
+            scores = []
+            for s in symbols_in_pair:
+                data = cmc_map.get(s)
+                if data:
+                    try:
+                        scores.append(_evaluate_cmc_score(score_expression, data))
+                    except Exception:
+                        scores.append(0.0)
+            return sum(scores) / len(scores) if scores else 0.0
+        filtered.sort(key=_pair_score, reverse=True)
+    elif sort_key and sort_key in col_names:
+        def _pair_sort_key(pair: str) -> float:
+            symbols_in_pair = pair.split("-", 1)
+            vals = []
+            for s in symbols_in_pair:
+                data = cmc_map.get(s)
+                if data:
+                    vals.append(data.get(sort_key, 0))
+            return sum(vals) / len(vals) if vals else 0.0
+        descending = sort_key in ("volume_24h", "volume_7d", "volume_30d", "market_cap")
+        filtered.sort(key=_pair_sort_key, reverse=descending)
+
+    logger.info("CMC filters: %d -> %d pairs", len(pairs), len(filtered))
+    return filtered
+
+
+def detect_cartesian_groups(pairs: List[str]) -> List[Tuple[List[str], List[str]]]:
+    """Find maximal rectangular subgraphs (cartesian products) in pair list.
+
+    E.g., {BTC,ETH} x {USDT,USD} from ["BTC-USDT", "BTC-USD", "ETH-USDT", "ETH-USD"].
+
+    Returns list of (bases, quotes) tuples.
+    """
+    # Build adjacency: base -> set of quotes, quote -> set of bases
+    base_to_quotes: Dict[str, Set[str]] = {}
+    quote_to_bases: Dict[str, Set[str]] = {}
+
+    for p in pairs:
+        parts = p.split("-", 1)
+        if len(parts) != 2:
+            continue
+        base, quote = parts
+        base_to_quotes.setdefault(base, set()).add(quote)
+        quote_to_bases.setdefault(quote, set()).add(base)
+
+    # Find maximal rectangles: for each pair of quotes, find common bases
+    groups: List[Tuple[List[str], List[str]]] = []
+    seen: Set[frozenset] = set()
+
+    all_quotes = list(quote_to_bases.keys())
+    for i in range(len(all_quotes)):
+        for j in range(i + 1, len(all_quotes) + 1):
+            quote_subset = all_quotes[i:j]
+            # Find bases that connect to ALL quotes in this subset
+            common_bases = None
+            for q in quote_subset:
+                q_bases = quote_to_bases.get(q, set())
+                if common_bases is None:
+                    common_bases = set(q_bases)
+                else:
+                    common_bases &= q_bases
+            if common_bases and len(common_bases) >= 2 and len(quote_subset) >= 2:
+                key = (frozenset(common_bases), frozenset(quote_subset))
+                if key not in seen:
+                    seen.add(key)
+                    groups.append((sorted(common_bases), sorted(quote_subset)))
+
+    # If no multi-row cartesian groups found, return single-pair groups
+    if not groups:
+        for p in pairs:
+            parts = p.split("-", 1)
+            if len(parts) == 2:
+                groups.append(([parts[0]], [parts[1]]))
+            else:
+                groups.append(([p], []))
+
+    return groups
+
+
+def _stochastic_window_with_density(
+    graph: CoinGraph,
+    window_bars: int,
+    rng: random.Random,
+    max_attempts: int = 10,
+) -> int:
+    """Try up to max_attempts random windows, pick the one with most distinct coins having data.
+
+    Returns the best start_bar index.
+    """
+    total_bars = len(graph.common_timestamps)
+    if total_bars <= window_bars:
+        return 0
+
+    best_start = 0
+    best_coin_count = 0
+
+    for _ in range(max_attempts):
+        start = rng.randint(0, total_bars - window_bars)
+        end = start + window_bars
+
+        # Count distinct coins (currencies) that have data in this window
+        coins_with_data = set()
+        for edge, df in graph.edges.items():
+            product_id = getattr(graph, "edge_product_id", {}).get(edge, "")
+            if "-" in str(product_id):
+                base = str(product_id).split("-", 1)[0]
+                # Check if this edge has data in the window
+                edge_bars = set(df.index) if hasattr(df, 'index') else set()
+                window_bars_set = set(graph.common_timestamps[start:end])
+                if edge_bars & window_bars_set:
+                    coins_with_data.add(base)
+
+        if len(coins_with_data) > best_coin_count:
+            best_coin_count = len(coins_with_data)
+            best_start = start
+
+    return best_start
+
+
+def _stochastic_wallet_init(
+    pairs: List[str],
+    capital: float,
+    graph: CoinGraph,
+    rng: random.Random,
+    max_base_allocation: float = 0.3,
+    n_base_assets: int = 0,
+) -> SimWallet:
+    """Seed wallet with mix of value asset + bag coins, not 100% USDT.
+
+    Allocates up to max_base_allocation * n_base_assets across top base currencies,
+    remainder goes to value asset.
+    """
+    value_asset = _choose_value_asset(graph)
+    all_nodes = set(getattr(graph, "nodes", set()))
+    initial_balances = {asset: 0.0 for asset in all_nodes}
+
+    if n_base_assets <= 0:
+        # Fallback: 100% value asset (current behavior)
+        initial_balances[value_asset] = float(capital)
+        return SimWallet(all_nodes, value_asset=value_asset, initial_balances=initial_balances)
+
+    # Extract base currencies from pairs, ranked by frequency
+    base_freq: Dict[str, int] = {}
+    for p in pairs:
+        parts = p.split("-", 1)
+        if len(parts) == 2:
+            base_freq[parts[0]] = base_freq.get(parts[0], 0) + 1
+
+    # Sort by frequency, pick top n_base_assets
+    sorted_bases = sorted(base_freq.items(), key=lambda x: -x[1])
+    selected_bases = [b for b, _ in sorted_bases[:n_base_assets]]
+
+    # Allocate capital
+    total_base_fraction = min(max_base_allocation * len(selected_bases), 0.5)
+    per_base = total_base_fraction / len(selected_bases) if selected_bases else 0
+
+    for base in selected_bases:
+        if base in initial_balances:
+            initial_balances[base] = capital * per_base
+
+    # Remainder to value asset
+    allocated = sum(initial_balances.get(b, 0) for b in selected_bases)
+    initial_balances[value_asset] = capital - allocated
+
+    return SimWallet(all_nodes, value_asset=value_asset, initial_balances=initial_balances)
+
+
+def _pair_route_score(pair: str, wallet: SimWallet, graph: CoinGraph) -> float:
+    """Score a pair using wallet._route_quotes() Bellman-Ford values + wallet holdings.
+
+    Higher score = more efficient route + aligns with current holdings.
+    """
+    parts = pair.split("-", 1)
+    if len(parts) != 2:
+        return 0.0
+    base, quote = parts
+
+    # Try to get route quotes from wallet
+    try:
+        route_quotes = getattr(wallet, '_route_quotes', None)
+        if route_quotes and callable(route_quotes):
+            routes = route_quotes()
+            # Use route efficiency as score component
+            key = (base, quote)
+            if key in routes:
+                route_cost = routes[key]
+                # Lower cost = better route = higher score
+                return max(0.0, 1.0 / (1.0 + abs(route_cost)))
+    except Exception:
+        pass
+
+    # Fallback: score based on current holdings alignment
+    free = wallet.free_qty_map()
+    if base in free and free[base] > 0:
+        return 0.5  # Already holds this asset, moderate score
+    return 0.0
+
+
+def _pair_cmc_score(pair: str, cmc_data: dict, signal_type: str) -> float:
+    """Score a pair based on CMC data and signal type.
+
+    winners=prefer CMC top gainers, losers=prefer losers,
+    other=prefer neutral, mixed=balanced.
+    """
+    parts = pair.split("-", 1)
+    if len(parts) != 2:
+        return 0.0
+    base, quote = parts
+
+    base_data = cmc_data.get(base, {})
+    quote_data = cmc_data.get(quote, {})
+    base_change = base_data.get("percent_change_24h", 0.0)
+    quote_change = quote_data.get("percent_change_24h", 0.0)
+    avg_change = (base_change + quote_change) / 2
+
+    if signal_type == "winners":
+        return max(0.0, avg_change)  # Prefer gainers
+    elif signal_type == "losers":
+        return max(0.0, -avg_change)  # Prefer losers (mean reversion)
+    elif signal_type == "other":
+        return max(0.0, 1.0 - abs(avg_change))  # Prefer neutral
+    else:  # mixed
+        return 1.0  # Balanced, no preference
+
+
+def _stochastic_bag_sample_weighted(
+    pairs: List[str],
+    graph: CoinGraph,
+    wallet: Optional[SimWallet],
+    cmc_data: Optional[dict],
+    cmc_signal_type: Optional[str] = None,
+    route_bias: float = 0.0,
+    cmc_weight: float = 0.0,
+    model_size: int = 50,
+    rng: Optional[random.Random] = None,
+    min_pairs: int = 5,
+    max_pairs: Optional[int] = None,
+) -> List[str]:
+    """Weighted bag sampling combining uniform + route_bias + cmc_weight scoring."""
+    if not pairs:
+        return []
+    rng = rng or random.Random()
+
+    target = max(min_pairs, int(max(1, model_size)) * STOCHASTIC_BAG_PER_WIDTH)
+    if max_pairs is not None:
+        target = min(target, max_pairs)
+    target = min(target, len(pairs))
+
+    if target >= len(pairs):
+        return list(pairs)
+
+    # Compute scores for each pair
+    scores = []
+    for p in pairs:
+        uniform_score = 1.0  # Base uniform score
+        route_score = _pair_route_score(p, wallet, graph) if wallet else 0.0
+        cmc_score_val = 0.0
+        if cmc_data and cmc_signal_type:
+            cmc_score_val = _pair_cmc_score(p, cmc_data, cmc_signal_type)
+
+        total = uniform_score + route_bias * route_score + cmc_weight * cmc_score_val
+        scores.append(max(0.001, total))  # Ensure positive
+
+    # Weighted random sampling
+    total_score = sum(scores)
+    weights = [s / total_score for s in scores]
+
+    selected = set()
+    while len(selected) < target:
+        idx = rng.choices(range(len(pairs)), weights=weights, k=1)[0]
+        selected.add(pairs[idx])
+
+    return list(selected)
+
+
+def _maybe_reshuffle_portfolio(
+    wallet: SimWallet,
+    graph: CoinGraph,
+    bar_idx: int,
+    interval: int,
+    threshold: float,
+    target: str = "equal_weight",
+    cmc_data: Optional[dict] = None,
+) -> List[OrderShim]:
+    """Every N bars, check drift from target allocation, generate rebalancing orders.
+
+    Returns list of rebalancing orders (empty if no rebalancing needed).
+    """
+    if interval <= 0:
+        return []
+    if bar_idx % interval != 0:
+        return []
+
+    orders = []
+    total_worth = wallet.worth(graph, bar_idx)
+    if total_worth <= 0:
+        return orders
+
+    free = wallet.free_qty_map()
+    all_assets = list(free.keys())
+    n_assets = max(1, len(all_assets))
+
+    # Determine target allocation
+    if target == "equal_weight":
+        target_fraction = 1.0 / n_assets
+        target_values = {a: total_worth * target_fraction for a in all_assets}
+    elif target == "route_value" and cmc_data:
+        # Weight by CMC market cap
+        total_mcap = sum(cmc_data.get(a, {}).get("market_cap", 0) for a in all_assets)
+        target_values = {}
+        for a in all_assets:
+            mcap = cmc_data.get(a, {}).get("market_cap", 0)
+            target_values[a] = total_worth * (mcap / total_mcap if total_mcap > 0 else 1.0 / n_assets)
+    else:  # cmc_signal or fallback
+        target_values = {a: total_worth / n_assets for a in all_assets}
+
+    # Check drift and generate orders
+    value_asset = getattr(wallet, 'value_asset', '')
+    for asset in all_assets:
+        current_value = free.get(asset, 0.0)
+        target_value = target_values.get(asset, 0.0)
+        drift = abs(current_value - target_value) / total_worth if total_worth > 0 else 0
+
+        if drift > threshold:
+            if current_value > target_value:
+                # Sell excess
+                sell_amt = current_value - target_value
+                if sell_amt > 0 and asset != value_asset:
+                    edge_key = (asset, value_asset) if hasattr(wallet, '_make_edge') else None
+                    orders.append(OrderShim(
+                        edge=(asset, value_asset),
+                        price=1.0,  # Will be filled by actual price
+                        is_buy=False,
+                        amt=sell_amt,
+                        created_bar=bar_idx,
+                        maturity_bar=bar_idx + 1,
+                        spend_asset=asset,
+                        confidence=0.5,
+                        fraction=drift,
+                    ))
+            else:
+                # Buy deficit
+                buy_amt = target_value - current_value
+                if buy_amt > 0 and asset != value_asset:
+                    orders.append(OrderShim(
+                        edge=(value_asset, asset),
+                        price=1.0,
+                        is_buy=True,
+                        amt=buy_amt,
+                        created_bar=bar_idx,
+                        maturity_bar=bar_idx + 1,
+                        spend_asset=value_asset,
+                        confidence=0.5,
+                        fraction=drift,
+                    ))
+
+    if orders:
+        logger.debug("Reshuffle at bar %d: %d orders generated", bar_idx, len(orders))
+    return orders
 
 
 def _choose_value_asset(graph: CoinGraph) -> str:
@@ -386,7 +874,7 @@ def run_walk_forward_validation(
         L_cycles=trained_model.L_cycles,
         device=trained_model.device_preference,
     )
-    print("  About to register edges", flush=True)
+    logger.debug("About to register edges")
     eval_model.register_edges(_canonical_pair_edges(graph))
     if trained_model._model and eval_model._model:
         eval_model._model.load_state_dict(trained_model._model.state_dict())
@@ -408,7 +896,8 @@ def run_walk_forward_validation(
         eval_model.update_prices(eval_graph, bar_idx)
         if use_profit_loss:
             settlement = wallet.settle_due_orders(
-                eval_graph, bar_idx=bar_idx, fee_rate=eval_graph.fee_rate
+                eval_graph, bar_idx=bar_idx, fee_rate=eval_graph.fee_rate,
+                spread_rate=eval_graph.fee_rate / 5.0,  # spread ~20% of fee
             )
             if eval_model.ready_for_prediction(bar_idx):
                 # If using a non-GTC workflow where the bot reposts orders
@@ -518,7 +1007,8 @@ def _run_agent_harness(
 
             if use_profit_loss:
                 settlement = wallet.settle_due_orders(
-                    graph, bar_idx=bar_idx, fee_rate=graph.fee_rate
+                    graph, bar_idx=bar_idx, fee_rate=graph.fee_rate,
+                    spread_rate=graph.fee_rate / 5.0,
                 )
                 if model.ready_for_prediction(bar_idx):
                     # BAIL: check if price movement can overcome fees
@@ -670,25 +1160,25 @@ def _run_agent_harness(
                 dd = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"]) if use_profit_loss else s["max_drawdown"]
                 parts.append(f"A{ai}: pnl={s['total_pnl']:.2f} bal={bal:.2f} dd={dd:.2f} DEAD(flat={s['flat_bars']})")
                 # DEBUG: dump wallet audit to see what actually happened
-                print(f"\n=== A{ai} WALLET AUDIT (last 50 events) ===", flush=True)
-                for entry in list(s["wallet"].audit)[-50:]:
-                    print(f"  {entry}", flush=True)
-            
+                logger.debug("A%d WALLET AUDIT (last 20 events)", ai)
+                for entry in list(s["wallet"].audit)[-20:]:
+                    logger.debug("  %s", entry)
+
             # STAGNATION AUDIT: show price variance for each pair over recent bars
-            print(f"\n=== STAGNATION AUDIT (bars {max(0, bar_idx-99)}-{bar_idx}) ===", flush=True)
+            logger.debug("STAGNATION AUDIT (bars %d-%d)", max(0, bar_idx-99), bar_idx)
             for edge in _canonical_pair_edges(graph):
                 exchange, base, quote = edge
                 key = f"{base}-{quote}"
                 df = graph.edges.get(edge)
                 if df is None or len(df) == 0:
                     continue
-                
+
                 # Get last 100 bars of data
                 start_idx = max(0, len(df) - 100)
                 recent = df.iloc[start_idx:]
                 if len(recent) == 0:
                     continue
-                
+
                 # Calculate variance on close prices
                 closes = recent["close"].values
                 mean_price = closes.mean()
@@ -697,10 +1187,11 @@ def _run_agent_harness(
                 min_price = closes.min()
                 max_price = closes.max()
                 range_pct = (max_price - min_price) / mean_price * 100 if mean_price > 0 else 0
-                
-                print(f"  {key}: mean={mean_price:.8f}, std={std_price:.8f}, var={var_price:.8f}, range={min_price:.8f}-{max_price:.8f} ({range_pct:.4f}%)", flush=True)
-            
-            print(f"Harness[{i+1}/{len(sorted_bars)}] Bar {bar_idx} | " + " | ".join(parts) + " — ALL DEAD", flush=True)
+
+                logger.debug("  %s: mean=%.8f, std=%.8f, var=%.8f, range=%.8f-%.8f (%.4f%%)",
+                    key, mean_price, std_price, var_price, min_price, max_price, range_pct)
+
+            logger.warning("Harness[%d/%d] Bar %d | %s — ALL DEAD", i+1, len(sorted_bars), bar_idx, " | ".join(parts))
             break
 
         if (i % print_every == 0 and i > 0) or (i == len(sorted_bars) - 1):
@@ -723,10 +1214,11 @@ def _run_agent_harness(
                     if use_profit_loss:
                         free = s["wallet"].free_qty_map()
                         locked = s["wallet"].reserved_qty_map()
-                        parts[-1] += f" free={free} locked={locked}"
+                        logger.debug("A%d free=%s locked=%s", ai, free, locked)
+                        parts[-1] += f" free={dict(list(free.items())[:10])} locked={dict(list(locked.items())[:10])}"
                 else:
                     parts.append(f"A{ai}: warmup")
-            print(f"Harness[{i+1}/{len(sorted_bars)}] Bar {bar_idx} | " + " | ".join(parts), flush=True)
+            logger.info("Harness[%d/%d] Bar %d | %s", i+1, len(sorted_bars), bar_idx, " | ".join(parts))
 
     return [(s["total_pnl"], s["max_drawdown"]) for s in states]
 
@@ -745,12 +1237,12 @@ def run_training(
     if end_bar is None:
         end_bar = len(graph.common_timestamps)
     loss_history = loss_history or []
-    print("  - set profile")
+    logger.debug("Setting up training profile")
     model.set_profile_enabled(profile_stats is not None)
-    print("  - calc ts_to_bar")
+    logger.debug("Calculating timestamp to bar mapping")
     ts_to_bar = {ts: i for i, ts in enumerate(graph.common_timestamps)}
     bars_with_data = set()
-    print("  - for df in graph.edges")
+    logger.debug("Scanning graph edges for bars with data")
     for df in graph.edges.values():
         bars_with_data.update(ts_to_bar[ts] for ts in set(df.index) & ts_to_bar.keys())
     (
@@ -763,9 +1255,8 @@ def run_training(
         pnl_history,
     ) = 0.0, 0, {}, 0.0, 0.0, 0.0, []
     wallet = _init_wallet(graph, capital)
-    print("  - sorted_bars")
     sorted_bars = sorted(b for b in bars_with_data if start_bar <= b < end_bar)
-    print(f"Training on {len(sorted_bars)} bars with data")
+    logger.info("Training on %d bars with data", len(sorted_bars))
     for i, bar_idx in enumerate(sorted_bars):
         if bar_idx >= len(graph.common_timestamps):
             break
@@ -775,7 +1266,8 @@ def run_training(
         model.update_prices(graph, bar_idx)
         if use_profit_loss:
             settlement = wallet.settle_due_orders(
-                graph, bar_idx=bar_idx, fee_rate=graph.fee_rate
+                graph, bar_idx=bar_idx, fee_rate=graph.fee_rate,
+                spread_rate=graph.fee_rate / 5.0,
             )
             if model.ready_for_prediction(bar_idx):
                 # BAIL: check if fisheye horizon is flat (no price movement)
@@ -909,15 +1401,12 @@ def run_training(
                 )
                 if use_profit_loss:
                     max_drawdown = max(max_drawdown, max_pnl - total_pnl)
-                print(
-                    f"Train[{i + 1}/{len(sorted_bars)}] Bar {bar_idx}: avg_loss={total_loss / n_updates:.6f}, updates={n_updates}, pnl={total_pnl:.5f}, balance={balance:.5f}, max_dd={max_drawdown:.5f}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"Train[{i + 1}/{len(sorted_bars)}] Bar {bar_idx}: warmup",
-                    flush=True,
-                )
+                    logger.info(
+                        "Train[%d/%d] Bar %d: avg_loss=%.6f, updates=%d, pnl=%.5f, balance=%.5f, max_dd=%.5f",
+                        i + 1, len(sorted_bars), bar_idx, total_loss / n_updates, n_updates, total_pnl, balance, max_drawdown,
+                    )
+                else:
+                    logger.debug("Train[%d/%d] Bar %d: warmup", i + 1, len(sorted_bars), bar_idx)
     if profile_stats is not None:
         profile_stats.clear()
         profile_stats.update(model.get_profile_stats())
@@ -1057,7 +1546,7 @@ def _bootstrap_binance_pair_universe(db_path: str) -> List[Dict[str, str]]:
         if source_pairs:
             ibv.write_pairs_to_db(db_path, "binance", source_pairs)
     except Exception as exc:
-        print(f"[Autoresearch] WARNING: failed to bootstrap Binance pair universe: {exc}")
+        logger.warning("Failed to bootstrap Binance pair universe: %s", exc)
 
     return _list_pairs_table_subscriptions(db_path, exchange="binance")
 
@@ -1226,9 +1715,10 @@ def _stochastic_span_bars(
 def format_bash_expansion(products: List[str]) -> str:
     """Render the selected bag in the order it was chosen.
 
-    Compacts into brace expansions in two directions:
+    Compacts into brace expansions:
     - Same base, multiple quotes: BTC-{USDT | BUSD}
     - Same quote, multiple bases: {ADA | ETH | SOL}-USDT
+    - Full cartesian: [{BTC,ETH}-{USDT,USD}]
     """
     if not products:
         return "[]"
@@ -1248,12 +1738,23 @@ def format_bash_expansion(products: List[str]) -> str:
         if quote not in quotes_for_base[base]:
             quotes_for_base[base].append(quote)
 
-    # Collect all unique quotes to detect single-quote-shared case
+    # Collect all unique quotes
     all_quotes: List[str] = []
     for base in bases_order:
         for q in quotes_for_base.get(base, []):
             if q not in all_quotes:
                 all_quotes.append(q)
+
+    # Full cartesian detection: every base has every quote
+    if len(all_quotes) >= 2 and len(bases_order) >= 2:
+        is_full_cartesian = all(
+            set(quotes_for_base.get(b, [])) == set(all_quotes)
+            for b in bases_order
+        )
+        if is_full_cartesian:
+            bases_inner = ",".join(bases_order)
+            quotes_inner = ",".join(all_quotes)
+            return f"[{{{bases_inner}}}-{{{quotes_inner}}}]"
 
     # If every base has exactly the same single quote, compact as {bases}-QUOTE
     if len(all_quotes) == 1 and all(len(quotes_for_base.get(b, [])) == 1 for b in bases_order if quotes_for_base.get(b)):
@@ -1287,14 +1788,23 @@ def run_autoresearch(
     min_partners: int = 3,
     bag_limit: int = STOCHASTIC_BAG_LIMIT,
     window_bars_override: int = 0,
+    # CMC params (TODO 10)
+    cmc_min_rank: Optional[int] = None,
+    cmc_min_volume_24h: Optional[float] = None,
+    cmc_min_mcap: Optional[float] = None,
+    cmc_min_volatility: Optional[float] = None,
+    cmc_max_volatility: Optional[float] = None,
+    cmc_sort: Optional[str] = None,
+    cmc_score: Optional[str] = None,
+    cmc_preset: Optional[str] = None,
 ):
     import cache
 
     cache.CandleCache(db_path)
-    print("Using HRMEdgePredictor for hierarchical reasoning")
+    logger.info("Using HRMEdgePredictor for hierarchical reasoning")
     experiments_db_path = str(Path(training_db_path or "training.duckdb"))
     if Path(experiments_db_path).resolve() == Path(db_path).resolve():
-        print("[Autoresearch] WARNING: experiments DB shares the candle cache path")
+        logger.warning("Experiments DB shares the candle cache path")
     with duckdb.connect(experiments_db_path) as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS experiments (timestamp TIMESTAMP DEFAULT now(), val_bpb DOUBLE, params VARCHAR, bag_spec VARCHAR, growth_phase VARCHAR, model_cas VARCHAR)"
@@ -1346,11 +1856,33 @@ def run_autoresearch(
         )
 
     if not all_db_subscriptions:
-        print("[StochasticBag] ERROR: no pairs available")
+        logger.error("No pairs available for stochastic bag sampling")
         return
 
     sanitized_subscriptions = _sanitize_training_subscriptions(all_db_subscriptions)
     filtered_pairs = [sub["product_id"] for sub in sanitized_subscriptions]
+
+    # CMC filter stage (TODO 10) — after sanitize, before min_partners
+    has_cmc_filters = any([cmc_min_rank, cmc_min_volume_24h, cmc_min_mcap,
+                           cmc_min_volatility, cmc_max_volatility, cmc_sort,
+                           cmc_score, cmc_preset])
+    if has_cmc_filters:
+        try:
+            with duckdb.connect(db_path, read_only=True) as cmc_conn:
+                filtered_pairs = _apply_cmc_filters(
+                    filtered_pairs, cmc_conn,
+                    min_rank=cmc_min_rank,
+                    min_volume_24h=cmc_min_volume_24h,
+                    min_mcap=cmc_min_mcap,
+                    min_volatility=cmc_min_volatility,
+                    max_volatility=cmc_max_volatility,
+                    sort_key=cmc_sort,
+                    score_expression=cmc_score,
+                    preset=cmc_preset,
+                )
+        except Exception as exc:
+            logger.warning("CMC filtering failed, continuing without it: %s", exc)
+
     # Optionally require that currencies have at least `min_partners` partners
     if min_partners and min_partners > 1:
         adj = {}
@@ -1363,13 +1895,12 @@ def run_autoresearch(
             adj.setdefault(q, set()).add(b)
         coin_set = {c for c, p in adj.items() if len(p) >= min_partners}
         partner_filtered = [pid for pid in filtered_pairs if (pid.split("-", 1)[0] in coin_set and pid.split("-", 1)[1] in coin_set)]
-        print(f"[StochasticBag] Applying min_partners={min_partners}: {len(filtered_pairs)} -> {len(partner_filtered)} pairs")
+        logger.info("Applying min_partners=%d: %d -> %d pairs", min_partners, len(filtered_pairs), len(partner_filtered))
         if partner_filtered:
             filtered_pairs = partner_filtered
         else:
-            print(
-                "[StochasticBag] WARNING: min_partners filter removed all cached pairs; "
-                "continuing with the unfiltered candle-backed universe"
+            logger.warning(
+                "min_partners filter removed all cached pairs; continuing with the unfiltered candle-backed universe"
             )
     if not filtered_pairs:
         # Fallback: query cleaned pairs from DuckDB `pairs` table (no JSON/text files)
@@ -1412,7 +1943,7 @@ def run_autoresearch(
                                                     fallback_candidates.append(f"{base}-{quote}")
                                                     break
                         if fallback_candidates:
-                            print(f"[StochasticBag] Fallback: using {len(fallback_candidates)} pairs from local binance_pairs_cleaned.json")
+                            logger.info("Fallback: using %d pairs from local binance_pairs_cleaned.json", len(fallback_candidates))
                 except Exception:
                     pass
 
@@ -1432,17 +1963,17 @@ def run_autoresearch(
                         if fallback_candidates:
                             # dedupe and report
                             fallback_candidates = list(dict.fromkeys(fallback_candidates))
-                            print(f"[StochasticBag] Fallback: using {len(fallback_candidates)} pairs discovered from data.binance.vision")
+                            logger.info("Fallback: using %d pairs discovered from data.binance.vision", len(fallback_candidates))
                     except Exception:
                         pass
             if fallback_candidates:
                 filtered_pairs = fallback_candidates
-                print(f"[StochasticBag] Fallback: using {len(filtered_pairs)} pairs from DuckDB `pairs` table")
+                logger.info("Fallback: using %d pairs from DuckDB `pairs` table", len(filtered_pairs))
             else:
-                print("[StochasticBag] ERROR: no pairs after filtering and no fallback available")
+                logger.error("No pairs after filtering and no fallback available")
                 return
         except Exception:
-            print("[StochasticBag] ERROR: no pairs after filtering and no fallback available")
+            logger.error("No pairs after filtering and no fallback available")
             return
 
     rng = random.Random()
@@ -1476,8 +2007,10 @@ def run_autoresearch(
         max(5, int(max(1, hidden_size)) * STOCHASTIC_BAG_PER_WIDTH),
         bag_cap,
     )
-    print(
-        f"\nAutoresearch: {len(filtered_pairs)} candidate pairs, stochastic bag target {bag_target_preview} (cap {bag_cap}), {total_bars} bars\nSquare Cube: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}"
+    logger.info(
+        "Autoresearch: %d candidate pairs, stochastic bag target %d (cap %d), %d bars. Square Cube: h=%d, H=%d, L=%d, Hc=%d, Lc=%d",
+        len(filtered_pairs), bag_target_preview, bag_cap, total_bars,
+        hidden_size, H_layers, L_layers, H_cycles, L_cycles,
     )
 
     try:
@@ -1502,9 +2035,7 @@ def run_autoresearch(
                 if pid in window_product_ids
             ]
             if len(window_pairs) < 5:
-                print(
-                    f"  Window rejected: only {len(window_pairs)}/5 pairs with local data"
-                )
+                logger.debug("Window rejected: only %d/5 pairs with local data", len(window_pairs))
                 continue
             selected_pairs = _stochastic_bag_sample(
                 window_pairs,
@@ -1514,8 +2045,7 @@ def run_autoresearch(
                 max_pairs=bag_cap,
             )
             bag_contents = format_bash_expansion(selected_pairs)
-
-            print(f"  Stochastic bag contents: {bag_contents}")
+            logger.info("Stochastic bag contents: %s", bag_contents)
 
             if exchange == "binance":
                 _prefetch_binance_candles_window(
@@ -1539,29 +2069,32 @@ def run_autoresearch(
                 ],
             )
             if not trial_graph.edges:
-                print(f"Phase {phase}: empty graph, skipping")
+                logger.warning("Phase %d: empty graph, skipping", phase)
                 continue
 
             lr, x_pixels, curvature, prediction_depth = (
                 10 ** random.uniform(-3.3, -1.2),
-                random.choice([10, 15, 20, 30]),
+                random.choice([30, 40, 50, 60]),  # min 30 to fit fisheye + 11 OHLCV features
                 random.uniform(0.5, 4.0),
                 random.choice(AUTORESEARCH_PREDICTION_DEPTH_CHOICES),
             )
             lr2, x_pixels2, curvature2, prediction_depth2 = (
                 10 ** random.uniform(-3.3, -1.2),
-                random.choice([10, 15, 20, 30]),
+                random.choice([30, 40, 50, 60]),
                 random.uniform(0.5, 4.0),
                 random.choice(AUTORESEARCH_PREDICTION_DEPTH_CHOICES),
             )
             # Shared y_depth so both agents compete on equal footing.
             # Cap to half the window so neither spends the harness in warmup.
             y_depth = min(random.choice(AUTORESEARCH_Y_DEPTH_CHOICES), window_bars // 2)
-            print(
-                f"\n=== Phase {phase} (HARNESS) ===\n  Square: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}\n  Bag: {len(selected_pairs)} pairs, {window_bars} bars\n  A0: lr={lr:.2e} xp={x_pixels} pd={prediction_depth}\n  A1: lr={lr2:.2e} xp={x_pixels2} pd={prediction_depth2}\n  Shared yd={y_depth}"
+            logger.info(
+                "Phase %d (HARNESS): Square h=%d, H=%d, L=%d, Hc=%d, Lc=%d. Bag: %d pairs, %d bars. A0: lr=%.2e xp=%d pd=%d. A1: lr=%.2e xp=%d pd=%d. Shared yd=%d",
+                phase, hidden_size, H_layers, L_layers, H_cycles, L_cycles,
+                len(selected_pairs), window_bars, lr, x_pixels, prediction_depth,
+                lr2, x_pixels2, prediction_depth2, y_depth,
             )
 
-            print("  About to init agents", flush=True)
+            logger.debug("About to init agents")
             model_a = HierarchicalReasoningModel(
                 n_edges=len(trial_graph.edges),
                 learning_rate=lr,
@@ -1592,7 +2125,7 @@ def run_autoresearch(
                 L_cycles=L_cycles,
                 device=device,
             )
-            print("  About to register edges", flush=True)
+            logger.debug("About to register edges")
             model_a.register_edges(_canonical_pair_edges(trial_graph))
             model_b.register_edges(_canonical_pair_edges(trial_graph))
             if checkpoint_path and Path(checkpoint_path).exists() and fixed_dim is None:
@@ -1617,10 +2150,10 @@ def run_autoresearch(
             )
             growth_dim = rng.choice(growth_options) if growth_options else None
 
-            print("  About to split", flush=True)
+            logger.debug("About to split")
             split = plan_walk_forward_split(len(trial_graph.common_timestamps), model_a)
             if split is None:
-                print("  Skipping: not enough bars for walk-forward split")
+                logger.warning("Skipping: not enough bars for walk-forward split")
                 continue
             _, train_end_bar, validation_end_bar = split
 
@@ -1630,7 +2163,7 @@ def run_autoresearch(
             for df in trial_graph.edges.values():
                 bars_with_data.update(ts_to_bar[ts] for ts in set(df.index) & ts_to_bar.keys())
             sorted_bars = sorted(b for b in bars_with_data if 0 <= b < train_end_bar)
-            print(f"Harness: {len(sorted_bars)} bars, 2 agents competing")
+            logger.info("Harness: %d bars, 2 agents competing", len(sorted_bars))
 
             wallet_a = _init_wallet(trial_graph, 100.0)
             wallet_b = _init_wallet(trial_graph, 100.0)
@@ -1645,7 +2178,7 @@ def run_autoresearch(
             pnl_a, dd_a = harness_results[0]
             pnl_b, dd_b = harness_results[1]
             winner = "A0" if pnl_a > pnl_b else "A1" if pnl_b > pnl_a else "TIE"
-            print(f"  HARNESS RESULT: A0 pnl={pnl_a:.2f} dd={dd_a:.2f} | A1 pnl={pnl_b:.2f} dd={dd_b:.2f} | Winner: {winner}")
+            logger.info("HARNESS RESULT: A0 pnl=%.2f dd=%.2f | A1 pnl=%.2f dd=%.2f | Winner: %s", pnl_a, dd_a, pnl_b, dd_b, winner)
 
             # Use the winner for validation and checkpointing — only if profitable
             best_pnl = max(pnl_a, pnl_b)
@@ -1668,19 +2201,17 @@ def run_autoresearch(
                 )
 
             if val_bpb is not None:
-                print(
-                    f"  walk_forward_bpb={val_bpb:.6f} (best={best_bpb:.6f}) | winner={winner}"
-                )
+                logger.info("walk_forward_bpb=%.6f (best=%.6f) | winner=%s", val_bpb, best_bpb, winner)
                 if val_bpb < best_bpb and best_pnl > 0:
                     best_bpb = val_bpb
-                    print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
+                    logger.info("--> [NEW BEST] val_bpb: %.6f", best_bpb)
                     if checkpoint_path:
                         model.save(
                             _checkpoint_variant(checkpoint_path, "best"),
                             checkpoint_type=f"autoresearch_best_phase_{phase}",
                         )
                 bag_expansion = format_bash_expansion(selected_pairs)
-                print(f"  Log Bag: {bag_expansion}")
+                logger.info("Log Bag: %s", bag_expansion)
                 with duckdb.connect(experiments_db_path) as conn:
                     conn.execute(
                         "INSERT INTO experiments (timestamp, val_bpb, params, bag_spec, growth_phase, model_cas) VALUES (now(), ?, ?, ?, ?, ?)",
@@ -1724,8 +2255,10 @@ def run_autoresearch(
                     )
                 )
                 if did_grow:
-                    print(
-                        f"\n  *** CONVERGED -> GROWTH: {growth_dim}[{old_h}, {old_H}, {old_L}, {old_Hc}, {old_Lc}] ->[{hidden_size}, {H_layers}, {L_layers}, {H_cycles}, {L_cycles}]"
+                    logger.info(
+                        "CONVERGED -> GROWTH: %s[%d, %d, %d, %d, %d] ->[%d, %d, %d, %d, %d]",
+                        growth_dim, old_h, old_H, old_L, old_Hc, old_Lc,
+                        hidden_size, H_layers, L_layers, H_cycles, L_cycles,
                     )
                     if checkpoint_path:
                         model.save(
@@ -1733,11 +2266,9 @@ def run_autoresearch(
                             checkpoint_type=f"autoresearch_grown_phase_{phase}",
                         )
                 else:
-                    print(
-                        f"\n  *** CONVERGED -> NO GROWTH: {growth_dim} already at max"
-                    )
+                    logger.info("CONVERGED -> NO GROWTH: %s already at max", growth_dim)
     except KeyboardInterrupt:
-        print("\nInterrupted.")
+        logger.info("Interrupted.")
 
 
 # --- Finetune ---
@@ -1751,11 +2282,12 @@ def finetune(
     skip_fetch: bool = True,
     device: str = "cpu",
 ):
-    print("=" * 60 + "\nHRM Fine-Tuning for Daytrading\n" + "=" * 60)
+    logger.info("HRM Fine-Tuning for Daytrading")
     with open(bag_path, "r") as f:
         selected_pairs = json.load(f)
-    print(
-        f"\nUsing fixed bag: {len(selected_pairs)} pairs\nFine-tuning on last {lookback_days} days of data\nLearning rate: {learning_rate}\nDevice: {device}\nGrowth: DISABLED"
+    logger.info(
+        "Using fixed bag: %d pairs. Fine-tuning on last %d days of data. Learning rate: %g. Device: %s. Growth: DISABLED",
+        len(selected_pairs), lookback_days, learning_rate, device,
     )
 
     start_time = datetime.now() - timedelta(days=lookback_days + 30)
@@ -1769,13 +2301,11 @@ def finetune(
             {"exchange": exchange, "product_id": pid} for pid in selected_pairs
         ],
     )
-    print(
-        f"Loaded {len(trial_graph.nodes)} nodes, {len(trial_graph.edges)} edges, {n_bars} bars"
-    )
+    logger.info("Loaded %d nodes, %d edges, %d bars", len(trial_graph.nodes), len(trial_graph.edges), n_bars)
     if not trial_graph.edges:
         raise ValueError("No edges available in bag subgraph")
 
-    print("  About to init model", flush=True)
+    logger.debug("About to init model")
     model = HierarchicalReasoningModel(
         n_edges=len(trial_graph.edges),
         learning_rate=learning_rate,
@@ -1789,7 +2319,7 @@ def finetune(
         L_layers=2,
         device=device,
     )
-    print("  About to register edges", flush=True)
+    logger.debug("About to register edges")
     model.register_edges(_canonical_pair_edges(trial_graph))
     if Path(pretrained_path).exists():
         model.load(pretrained_path)
@@ -1807,9 +2337,7 @@ def finetune(
     if split is None:
         raise ValueError("Not enough bars for walk-forward fine-tuning validation")
     start_bar, train_end_bar, validation_end_bar = split
-    print(
-        f"\nFine-tuning on bars {start_bar}:{train_end_bar} with walk-forward holdout {train_end_bar}:{validation_end_bar}"
-    )
+    logger.info("Fine-tuning on bars %d:%d with walk-forward holdout %d:%d", start_bar, train_end_bar, train_end_bar, validation_end_bar)
 
     total_loss, n_updates, _, _ = run_training(
         trial_graph, model, start_bar=start_bar, end_bar=train_end_bar, print_every=100,
@@ -1823,14 +2351,12 @@ def finetune(
         warmup_start_bar=start_bar,
     )
 
-    print(f"\nFine-tuning complete: {_training_status(total_loss, n_updates)}")
+    logger.info("Fine-tuning complete: %s", _training_status(total_loss, n_updates))
     if walk_forward_loss is not None:
-        print(
-            f"Walk-forward holdout: avg_loss={walk_forward_loss:.6f}, n_updates={walk_forward_updates}"
-        )
+        logger.info("Walk-forward holdout: avg_loss=%.6f, n_updates=%d", walk_forward_loss, walk_forward_updates)
     if n_updates > 0 and walk_forward_loss is not None:
         model.save(output_path, checkpoint_type="finetuned_daytrade")
-        print(f"Saved fine-tuned model to: {output_path}")
+        logger.info("Saved fine-tuned model to: %s", output_path)
 
 
 # --- Worker ---
@@ -1929,7 +2455,7 @@ class TrainingWorker:
             rng,
             max_pairs=_stochastic_bag_limit(self.hidden_size, self.bag_limit),
         )
-        print(f"  Stochastic bag contents: {format_bash_expansion(selected_pairs)}")
+        logger.info("Stochastic bag contents: %s", format_bash_expansion(selected_pairs))
 
         window_bars = min(10000, int(total_seconds / 300))
         start_offset = rng.uniform(0, max(0, total_seconds - window_bars * 300))
@@ -1960,7 +2486,7 @@ class TrainingWorker:
             L_layers=self.L_layers,
             device=self.device,
         )
-        self.print("  About to register edges", flush=True)
+        self.logger.debug("About to register edges")
         self.model.register_edges(_canonical_pair_edges(trial_graph))
         if cp_path.exists():
             self.model.load(str(cp_path))
@@ -1975,7 +2501,7 @@ class TrainingWorker:
         )
         growth_dim = rng.choice(growth_options) if growth_options else None
 
-        print("  About to split", flush=True)
+        logger.debug("About to split")
         split = plan_walk_forward_split(len(trial_graph.common_timestamps), self.model)
         if not split:
             return
@@ -2051,7 +2577,7 @@ class TrainingWorker:
             self.model.load(str(cp_path))
             self.model._lr = 0.0001
 
-        self.print("  About to register edges", flush=True)
+        self.logger.debug("About to register edges")
         self.model.register_edges(_canonical_pair_edges(trial_graph))
         if self.model._optimizer:
             for param_group in self.model._optimizer.param_groups:
@@ -2060,7 +2586,7 @@ class TrainingWorker:
                 for param_group in self.model._optimizer.param_groups:
                     self.model._scheduler.base_lrs = [0.0001]
 
-        print("  About to split", flush=True)
+        logger.debug("About to split")
         split = plan_walk_forward_split(len(trial_graph.common_timestamps), self.model)
         if not split:
             return
@@ -2152,6 +2678,23 @@ def health():
 def main():
     parser = argparse.ArgumentParser(description="HRM Showdown Unified CLI")
 
+    # Logging (TODO 2)
+    log_group = parser.add_argument_group("logging")
+    log_group.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default=None,
+        help="Set the logging level (default: INFO).",
+    )
+    log_group.add_argument(
+        "--verbose", action="store_true", default=False,
+        help="Set logging level to DEBUG.",
+    )
+    log_group.add_argument(
+        "--quiet", action="store_true", default=False,
+        help="Set logging level to WARNING.",
+    )
+
     # Commands (as flags)
     parser.add_argument("--autoresearch", action="store_true")
     parser.add_argument("--finetune", action="store_true")
@@ -2184,12 +2727,60 @@ def main():
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--bars", type=int, default=0, help="Override window_bars in autoresearch (0 = auto)")
 
+    # CMC Integration (TODO 7)
+    cmc_group = parser.add_argument_group("cmc")
+    cmc_group.add_argument("--cmc-min-rank", type=int, default=None, help="Maximum CMC rank to include (lower=better)")
+    cmc_group.add_argument("--cmc-min-volume-24h", type=float, default=None, help="Minimum 24h volume in USD")
+    cmc_group.add_argument("--cmc-min-mcap", type=float, default=None, help="Minimum market cap in USD")
+    cmc_group.add_argument("--cmc-max-volatility", type=float, default=None, help="Maximum |%%change 24h|")
+    cmc_group.add_argument("--cmc-min-volatility", type=float, default=None, help="Minimum |%%change 24h|")
+    cmc_group.add_argument("--cmc-sort", default=None, help="Sort pairs by CMC column (rank, volume_24h, market_cap)")
+    cmc_group.add_argument("--cmc-score", default=None, help="Custom scoring expression (uses min/max/abs/log)")
+    cmc_group.add_argument("--cmc-preset", choices=["liquid", "volatile", "stable", "trending", "emerging", "bluechip"], default=None)
+
+    # Directional partner tracking (TODO 12)
+    partner_group = parser.add_argument_group("partners")
+    partner_group.add_argument("--min-base-partners", type=int, default=None, help="Minimum quote partners for a base currency")
+    partner_group.add_argument("--min-quote-partners", type=int, default=None, help="Minimum base partners for a quote currency")
+    partner_group.add_argument("--min-cartesian-size", type=int, default=None, help="Minimum cartesian product size to include")
+
+    # Wallet stochastic config (TODO 16)
+    wallet_group = parser.add_argument_group("wallet")
+    wallet_group.add_argument("--wallet-stochastic-assets", type=int, default=0, help="Number of base assets to seed wallet with")
+    wallet_group.add_argument("--wallet-max-base-fraction", type=float, default=0.3, help="Max fraction of capital in any base asset")
+    wallet_group.add_argument("--wallet-n-base-assets", type=int, default=0, help="Number of base assets for stochastic wallet init")
+
+    # Bag weighting (TODO 18)
+    bag_group = parser.add_argument_group("bag")
+    bag_group.add_argument("--bag-route-bias", type=float, default=0.0, help="Weight for route-based scoring in bag sampling")
+    bag_group.add_argument("--bag-cmc-signal", choices=["winners", "losers", "other", "mixed"], default=None, help="CMC signal type for bag weighting")
+    bag_group.add_argument("--bag-cmc-weight", type=float, default=0.0, help="Weight for CMC-based scoring in bag sampling")
+    bag_group.add_argument("--bag-cmc-top-n", type=int, default=50, help="Number of top CMC coins to consider")
+
+    # Reshuffle config (TODO 22)
+    reshuffle_group = parser.add_argument_group("reshuffle")
+    reshuffle_group.add_argument("--reshuffle-interval", type=int, default=0, help="Rebalance portfolio every N bars (0=disabled)")
+    reshuffle_group.add_argument("--reshuffle-threshold", type=float, default=0.1, help="Drift threshold for rebalancing")
+    reshuffle_group.add_argument("--reshuffle-target", choices=["equal_weight", "route_value", "cmc_signal"], default="equal_weight")
+
     parser.add_argument("--mode", choices=["pretrain", "finetune"], default=None)
     parser.add_argument("--worker-id", default="worker")
 
     parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args()
+
+    # Resolve logging level: --verbose > --quiet > --log-level > default INFO
+    if args.verbose:
+        log_level = "DEBUG"
+    elif args.quiet:
+        log_level = "WARNING"
+    elif args.log_level:
+        log_level = args.log_level
+    else:
+        log_level = "INFO"
+    setup_logging(level=log_level)
+
     ensure_pool_running(str(Config.DB_PATH))
 
     if args.autoresearch:
@@ -2204,6 +2795,14 @@ def main():
             min_partners=args.min_partners,
             bag_limit=args.bag_limit,
             window_bars_override=args.bars,
+            cmc_min_rank=args.cmc_min_rank,
+            cmc_min_volume_24h=args.cmc_min_volume_24h,
+            cmc_min_mcap=args.cmc_min_mcap,
+            cmc_min_volatility=args.cmc_min_volatility,
+            cmc_max_volatility=args.cmc_max_volatility,
+            cmc_sort=args.cmc_sort,
+            cmc_score=args.cmc_score,
+            cmc_preset=args.cmc_preset,
         )
     elif args.finetune:
         if not args.pretrained or not args.bag:

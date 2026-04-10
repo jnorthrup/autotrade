@@ -5,6 +5,7 @@ Consolidates config.py, pool_client.py, bag_io.py, candle_cache.py, and coin_gra
 
 import hashlib
 import json
+import logging
 import math
 import os
 import socket
@@ -35,6 +36,8 @@ from coinbase.rest import RESTClient
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 # --- Config ---
@@ -515,6 +518,8 @@ class CandleCache:
             "CREATE INDEX IF NOT EXISTS idx_candles_time ON candles(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_candles_exchange_time ON candles(exchange, timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_candles_exchange_prod_gran ON candles(exchange, product_id, granularity)",
+            # CMC rankings table (TODO 6)
+            "CREATE TABLE IF NOT EXISTS cmc_rankings (symbol VARCHAR, rank INTEGER, price_usd DOUBLE, market_cap DOUBLE, volume_24h DOUBLE, volume_7d DOUBLE, volume_30d DOUBLE, percent_change_1h DOUBLE, percent_change_24h DOUBLE, percent_change_7d DOUBLE, percent_change_30d DOUBLE, last_updated VARCHAR, fetched_at TIMESTAMP)",
         ]
         if _use_pool(self.db_path):
             p = _pool()
@@ -736,8 +741,9 @@ class CandleCache:
         for pass_idx in range(1, max(max_passes, 1) + 1):
             gaps_df = self._get_bag_gaps(deduped, window_start, window_end, granularity)
             if gaps_df.empty:
-                print(
-                    f"{log_prefix} {label} perfected window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+                logger.info(
+                    "%s %s perfected window=%s -> %s",
+                    log_prefix, label, _utc_isoformat(window_start), _utc_isoformat(window_end)
                 )
                 return {
                     "status": "perfected",
@@ -754,8 +760,9 @@ class CandleCache:
                 for r in gaps_df.itertuples()
             )
             if signature == previous_signature:
-                print(
-                    f"{log_prefix} {label} stalled remaining_fragments={len(gaps_df)}"
+                logger.debug(
+                    "%s %s stalled remaining_fragments=%d",
+                    log_prefix, label, len(gaps_df)
                 )
                 return {
                     "status": "stalled",
@@ -763,8 +770,10 @@ class CandleCache:
                     "remaining_fragments": len(gaps_df),
                 }
             previous_signature = signature
-            print(
-                f"{log_prefix} {label} pass={pass_idx}/{max(max_passes, 1)} fragments={len(gaps_df)} window={_utc_isoformat(window_start)} -> {_utc_isoformat(window_end)}"
+            logger.info(
+                "%s %s pass=%d/%d fragments=%d window=%s -> %s",
+                log_prefix, label, pass_idx, max(max_passes, 1), len(gaps_df),
+                _utc_isoformat(window_start), _utc_isoformat(window_end)
             )
             for exchange, group in gaps_df.groupby("exchange"):
                 self.backfill_http_exact(

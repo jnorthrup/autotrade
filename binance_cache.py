@@ -1,6 +1,7 @@
 import urllib.request
 import zipfile
 import io
+import logging
 import pandas as pd
 from datetime import datetime
 import cache
@@ -8,6 +9,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from tools import import_binance_vision_pairs as pair_import
+
+logger = logging.getLogger(__name__)
 
 
 def _query_month_row_count(
@@ -116,9 +119,9 @@ def fetch_binance_vision(
             ) == 0:
                 missing_months.append((y, m))
     except Exception as exc:
-        print(
-            f"[Binance] WARNING: failed to probe cached months for {pair}: {exc}; "
-            "falling back to network fetch"
+        logger.warning(
+            "Failed to probe cached months for %s: %s; falling back to network fetch",
+            pair, exc
         )
         missing_months = months
 
@@ -133,9 +136,9 @@ def fetch_binance_vision(
     tasks = [(binance_pair, tunit, y, m) for (y, m) in missing_months]
 
     if verbose:
-        print(
-            f"Fetching Binance Vision months for {pair} "
-            f"({len(tasks)} months) covering {start.date()}..{end.date()}..."
+        logger.info(
+            "Fetching Binance Vision months for %s (%d months) covering %s..%s...",
+            pair, len(tasks), start.date(), end.date()
         )
 
     save_lock = threading.Lock()
@@ -158,20 +161,17 @@ def fetch_binance_vision(
                 try:
                     c.save_candles(rows)
                 except Exception as exc:
-                    print(f"\n[Binance] WARNING: failed to save {pair} candles: {exc}")
+                    logger.warning("Failed to save %s candles: %s", pair, exc)
                     continue
             saved_months += 1
 
     if not got_any:
-        print(f"[Binance] no data found for requested months: {pair}")
+        logger.warning("No data found for requested months: %s", pair)
     elif verbose:
-        print(
-            f"[Binance] cached {pair}: saved {saved_months}/{len(tasks)} month(s)"
-            + (
-                f", missing {missing_archives}"
-                if missing_archives
-                else ""
-            )
+        logger.info(
+            "Cached %s: saved %d/%d month(s)%s",
+            pair, saved_months, len(tasks),
+            f", missing {missing_archives}" if missing_archives else ""
         )
     return {
         "pair": pair,
@@ -189,10 +189,12 @@ def mark_pair_unavailable(db_path: str, pair: str) -> int:
         keep=False,
     )
     if updated:
-        print(f"[Binance] disabled pair with no Vision data: {pair}")
+        logger.warning("Disabled pair with no Vision data: %s", pair)
     return updated
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    setup_logging(level="DEBUG")
     for pair in ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT", "BNB-USDT", "LTC-USDT", "DOT-USDT"]:
         fetch_binance_vision("candles.duckdb", pair, "300", verbose=True)
-    print("Done!")
+    logger.info("Done!")
