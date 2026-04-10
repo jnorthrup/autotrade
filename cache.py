@@ -1177,8 +1177,12 @@ class CoinGraph:
                         subs, start, end, granularity=granularity
                     )
 
+        # Snap start to granularity boundary so full_index aligns with candle timestamps
+        gran_sec = int(granularity)
+        snap_offset = start.timestamp() % gran_sec
+        aligned_start = start + timedelta(seconds=(gran_sec - snap_offset) if snap_offset else 0)
         full_index = pd.date_range(
-            start=start, end=end, freq=f"{granularity}s", inclusive="left"
+            start=aligned_start, end=end, freq=f"{granularity}s", inclusive="left"
         )
         values_sql = ", ".join(
             f"({_sql_escape(s['exchange'])}, {_sql_escape(s['product_id'])})"
@@ -1204,6 +1208,10 @@ class CoinGraph:
         else:
             with duckdb.connect(db_path) as conn:
                 surface_df = conn.execute(sql).df()
+
+        # Ensure timestamp column is proper datetime for reindex alignment
+        if not surface_df.empty and "timestamp" in surface_df.columns:
+            surface_df["timestamp"] = pd.to_datetime(surface_df["timestamp"], errors="coerce")
 
         valid_pairs = []
         for (ex, pid), df in surface_df.groupby(["exchange", "product_id"], sort=False):

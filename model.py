@@ -127,14 +127,89 @@ class SwiGLU(nn.Module):
 
 def trunc_normal_init_(tensor, std=1.0): return nn.init.normal_(tensor, mean=0.0, std=std)
 
-class FisheyeEmbedding(nn.Module):
-    def __init__(self, x_pixels: int, hidden_size: int):
+class PancakeEmbedding(nn.Module):
+    """Pancake: flatten multi-slot features into a single branded vector.
+    
+    From mp-superproject KlineViewUtil.pancake: N rows x W cols -> 1D N*W vector,
+    each slot branded by column/rowIndex. Adds:
+    - time-axis cyclical one-hots (DateShed-style: minute-of-hour, hour-of-day, day-of-week)
+    - bag slot one-hot (which edges in the bag are active this bar)
+    """
+    def __init__(self, x_pixels: int, hidden_size: int, n_time_features: int = 18, max_bag_slots: int = 32):
         super().__init__()
-        self.proj = nn.Linear(x_pixels, hidden_size)
-        nn.init.zeros_(self.proj.weight)
-        nn.init.zeros_(self.proj.bias)
-    def forward(self, fisheye: Tensor) -> Tensor:
-        return self.proj(fisheye).unsqueeze(1)
+        self.x_pixels = x_pixels
+        self.max_bag_slots = max_bag_slots
+        # Pancake input: fisheye(x_pixels) + time_features(n_time_features) + bag_one_hot(max_bag_slots)
+        total_features = x_pixels + n_time_features + max_bag_slots
+        self.proj = nn.Linear(total_features, hidden_size)
+        self.n_time_features = n_time_features
+    
+    def forward(self, fisheye: Tensor, time_features: Optional[Tensor] = None, bag_one_hot: Optional[Tensor] = None) -> Tensor:
+        parts = [fisheye]
+        if time_features is not None:
+            parts.append(time_features)
+        else:
+            parts.append(torch.zeros(fisheye.shape[0], self.n_time_features, device=fisheye.device, dtype=fisheye.dtype))
+        if bag_one_hot is not None:
+            if bag_one_hot.shape[-1] < self.max_bag_slots:
+                pad = torch.zeros(fisheye.shape[0], self.max_bag_slots - bag_one_hot.shape[-1], device=fisheye.device, dtype=fisheye.dtype)
+                bag_one_hot = torch.cat([bag_one_hot, pad], dim=-1)
+            elif bag_one_hot.shape[-1] > self.max_bag_slots:
+                bag_one_hot = bag_one_hot[:, :self.max_bag_slots]
+            parts.append(bag_one_hot)
+        else:
+            parts.append(torch.zeros(fisheye.shape[0], self.max_bag_slots, device=fisheye.device, dtype=fisheye.dtype))
+        pancake = torch.cat(parts, dim=-1)
+        return self.proj(pancake).unsqueeze(1)
+
+
+def time_cyclical_features(bar_idx: int, bars_per_day: int = 288) -> List[float]:
+    """DateShed-style cyclical time encoding. Returns sin/cos features for
+    minute-of-hour, hour-of-day, day-of-week assuming 5-minute bars."""
+    # bars_per_day = 288 for 5-min bars
+    hour_len = 12  # bars per hour (5-min bars)
+    features = []
+    # Within-day phase
+    day_phase = (bar_idx % bars_per_day) / bars_per_day
+    features.append(math.sin(2 * math.pi * day_phase))
+    features.append(math.cos(2 * math.pi * day_phase))
+    # Within-hour phase
+    hour_phase = (bar_idx % hour_len) / hour_len
+    features.append(math.sin(2 * math.pi * hour_phase))
+    features.append(math.cos(2 * math.pi * hour_phase))
+    # Week phase (7 days)
+    week_phase = (bar_idx % (bars_per_day * 7)) / (bars_per_day * 7)
+    features.append(math.sin(2 * math.pi * week_phase))
+    features.append(math.cos(2 * math.pi * week_phase))
+    # Additional harmonics for intraday patterns
+    features.append(math.sin(4 * math.pi * day_phase))
+    features.append(math.cos(4 * math.pi * day_phase))
+    features.append(math.sin(6 * math.pi * day_phase))
+    features.append(math.cos(6 * math.pi * day_phase))
+    # Raw bar-in-day and bar-in-hour normalized
+    features.append(day_phase)
+    features.append(hour_phase)
+    # High-order harmonics for weekly structure
+    features.append(math.sin(4 * math.pi * week_phase))
+    features.append(math.cos(4 * math.pi * week_phase))
+    features.append(math.sin(8 * math.pi * day_phase))
+    features.append(math.cos(8 * math.pi * day_phase))
+    features.append(math.sin(2 * math.pi * day_phase * 3))
+    features.append(math.cos(2 * math.pi * day_phase * 3))
+    return features
+
+
+def stochastic_fisheye_boundaries(y_depth: int, x_pixels: int, curvature: float,
+                                   rng: Optional[np.random.RandomState] = None) -> List[int]:
+    """Fisheye boundaries with stochastic curvature perturbation.
+    During training, curvature is jittered to teach the model math rigor
+    instead of memorizing fixed bucket boundaries."""
+    if rng is not None:
+        # Jitter curvature by ±30% during training
+        curvature = curvature * rng.uniform(0.7, 1.3)
+        # Jitter y_depth by ±10% (but floor at x_pixels)
+        y_depth = max(x_pixels, int(y_depth * rng.uniform(0.9, 1.1)))
+    return fisheye_boundaries(y_depth, x_pixels, curvature)
 
 class HRMBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, expansion: float = 4.0):
@@ -162,19 +237,16 @@ class HRMEdgeCarry:
     z_L: Tensor
 
 class HRMEdgePredictor(nn.Module):
-    def __init__(self, x_pixels=20, hidden_size=64, num_nodes=1, num_heads=4, H_layers=2, L_layers=2, H_cycles=2, L_cycles=2, expansion=4.0, rope_theta=10000.0, max_seq_len=64):
+    def __init__(self, x_pixels=20, hidden_size=64, num_nodes=1, num_heads=4, H_layers=2, L_layers=2, H_cycles=2, L_cycles=2, expansion=4.0, rope_theta=10000.0, max_seq_len=64, max_bag_slots=32):
         super().__init__()
         self.x_pixels, self.hidden_size, self.num_nodes, self.num_heads = x_pixels, hidden_size, max(1, int(num_nodes)), num_heads
         self.H_layers, self.L_layers, self.H_cycles, self.L_cycles, self.expansion = H_layers, L_layers, H_cycles, L_cycles, expansion
+        self.max_bag_slots = max_bag_slots
         
-        self.embed = FisheyeEmbedding(x_pixels, hidden_size)
+        self.embed = PancakeEmbedding(x_pixels, hidden_size, n_time_features=18, max_bag_slots=max_bag_slots)
         self.base_node_embed = nn.Embedding(self.num_nodes, hidden_size)
         self.quote_node_embed = nn.Embedding(self.num_nodes, hidden_size)
         self.pair_index_proj = nn.Linear(4, hidden_size)
-        nn.init.zeros_(self.base_node_embed.weight)
-        nn.init.zeros_(self.quote_node_embed.weight)
-        nn.init.zeros_(self.pair_index_proj.weight)
-        nn.init.zeros_(self.pair_index_proj.bias)
 
         self.rotary_emb = RotaryEmbedding(hidden_size // num_heads, max_seq_len, rope_theta)
         self.H_level = HRMReasoningModule(hidden_size, num_heads, H_layers, expansion)
@@ -185,11 +257,13 @@ class HRMEdgePredictor(nn.Module):
 
         self.fraction_head = nn.Linear(hidden_size, 1)
         self.ptt_head = nn.Linear(hidden_size, 1)
-        self.limit_head = nn.Linear(hidden_size, 1)
-        self.stop_head = nn.Linear(hidden_size, 1)
-        for head in [self.fraction_head, self.ptt_head, self.limit_head, self.stop_head]:
-            nn.init.zeros_(head.weight)
-            nn.init.zeros_(head.bias)
+        self.bid_head = nn.Linear(hidden_size, 1)
+        self.sl_head = nn.Linear(hidden_size, 1)
+        # Xavier init for heads so random weights produce nonzero signals from bar 1.
+        # Zero-init backbone is fine; heads must break symmetry immediately.
+        for head in [self.fraction_head, self.ptt_head, self.bid_head, self.sl_head]:
+            nn.init.xavier_normal_(head.weight, gain=2.0)
+            nn.init.uniform_(head.bias, -0.5, 0.5)
 
     def resize_node_embeddings(self, new_num_nodes: int):
         new_num_nodes = max(1, int(new_num_nodes))
@@ -216,23 +290,35 @@ class HRMEdgePredictor(nn.Module):
             z_L=self.L_init.view(1, 1, self.hidden_size).expand(batch_size, -1, -1).clone().to(device),
         )
 
-    def forward(self, fisheye: Tensor, base_idx: Optional[Tensor]=None, quote_idx: Optional[Tensor]=None, carry: Optional[HRMEdgeCarry]=None):
-        input_emb = self.embed(fisheye)
+    def forward(self, fisheye: Tensor, base_idx: Optional[Tensor]=None, quote_idx: Optional[Tensor]=None, carry: Optional[HRMEdgeCarry]=None, time_features: Optional[Tensor]=None, bag_one_hot: Optional[Tensor]=None):
+        input_emb = self.embed(fisheye, time_features, bag_one_hot)
         if base_idx is not None and quote_idx is not None:
             input_emb = input_emb + self._pair_input_embedding(base_idx, quote_idx)
         carry = carry or self.init_carry(fisheye.shape[0], fisheye.device)
         cos_sin = self.rotary_emb()
         z_H, z_L = carry.z_H, carry.z_L
-        for _ in range(self.H_cycles):
-            for _ in range(self.L_cycles):
-                z_L = self.L_level(z_L, z_H + input_emb, cos_sin)
-            z_H = self.H_level(z_H, z_L, cos_sin)
+
+        # HRM 1-step grad: run all cycles except the last in no_grad,
+        # only the final L_step and H_step carry gradients.
+        # This is the core HRM training insight from the AGI2 paper.
+        with torch.no_grad():
+            for h_step in range(self.H_cycles):
+                for l_step in range(self.L_cycles):
+                    if not ((h_step == self.H_cycles - 1) and (l_step == self.L_cycles - 1)):
+                        z_L = self.L_level(z_L, z_H + input_emb, cos_sin)
+                if not (h_step == self.H_cycles - 1):
+                    z_H = self.H_level(z_H, z_L, cos_sin)
+
+        # Single differentiable step
+        z_L = self.L_level(z_L, z_H + input_emb, cos_sin)
+        z_H = self.H_level(z_H, z_L, cos_sin)
+
         z = z_H.squeeze(1)
         return (
             torch.tanh(self.fraction_head(z)).squeeze(-1),
             torch.sigmoid(self.ptt_head(z)).squeeze(-1),
-            torch.sigmoid(self.limit_head(z)).squeeze(-1),
-            torch.sigmoid(self.stop_head(z)).squeeze(-1),
+            torch.tanh(self.bid_head(z)).squeeze(-1),
+            torch.sigmoid(self.sl_head(z)).squeeze(-1),
             HRMEdgeCarry(z_H=z_H.detach(), z_L=z_L.detach()),
         )
 
@@ -290,7 +376,7 @@ class HRMEdgePredictor(nn.Module):
 
     def grow_hidden_size(self, new_hidden_size: int):
         if new_hidden_size // self.hidden_size != 4: raise ValueError("Can only grow by 4×")
-        grown = HRMEdgePredictor(self.x_pixels, new_hidden_size, self.num_nodes, max(1, new_hidden_size // 64), self.H_layers, self.L_layers, self.H_cycles, self.L_cycles, self.expansion).to(next(self.parameters()).device)
+        grown = HRMEdgePredictor(self.x_pixels, new_hidden_size, self.num_nodes, max(1, new_hidden_size // 64), self.H_layers, self.L_layers, self.H_cycles, self.L_cycles, self.expansion, max_bag_slots=self.max_bag_slots).to(next(self.parameters()).device)
         expanded_sd = {k: self._expand_param_to_shape(self.state_dict()[k], v.shape).to(dtype=v.dtype, device=v.device) if k in self.state_dict() else v for k, v in grown.state_dict().items()}
         grown.load_state_dict(expanded_sd, strict=False)
         return grown
@@ -344,38 +430,55 @@ def _checkpoint_cas(metadata: Dict[str, object], state_dict: Dict[str, Tensor]) 
     return hasher.hexdigest()
 
 class HierarchicalReasoningModel:
-    def __init__(self, n_edges=0, learning_rate=0.001, y_depth=200, x_pixels=20, curvature=2.0, h_dim=4, z_dim=4, prediction_depth=1, H_layers=2, L_layers=2, H_cycles=2, L_cycles=2, device="auto", **kwargs):
+    def __init__(self, n_edges=0, learning_rate=0.005, y_depth=200, x_pixels=20, curvature=2.0, h_dim=4, z_dim=4, prediction_depth=1, H_layers=2, L_layers=2, H_cycles=2, L_cycles=2, device="auto", max_bag_slots=32, stochastic_fisheye=True, **kwargs):
         self.y_depth, self.x_pixels, self._lr, self.curvature = y_depth, x_pixels, learning_rate, curvature
         self.h_dim, self.z_dim, self.prediction_depth = h_dim, z_dim, prediction_depth
         self.H_layers, self.L_layers, self.H_cycles, self.L_cycles = H_layers, L_layers, H_cycles, L_cycles
+        self.max_bag_slots, self.stochastic_fisheye = max_bag_slots, stochastic_fisheye
         self.device_preference = device
         self.edge_names, self.node_names, self.node_to_idx, self.num_nodes = [],[], {}, 0
         self._model, self._optimizer, self._device = None, None, get_device(self.device_preference)
-        self._close_buffer, self._prediction_queue, self._carry, self._edge_observation_count, self._observed_edges_for_bar = {}, {}, {}, {},[]
+        self._graph = None  # pandas-only: model reads directly from graph.edges DataFrames
+        self._edge_bar_idx = {}  # last bar_idx seen per edge (for bar-counting)
+        self._prediction_queue, self._carry, self._observed_edges_for_bar, self._kline_view, self._kline_live = {}, {}, [], {}, {}
         self._max_history = max(y_depth + 100, 500)
         self._last_price_bar_idx = None
         self._fisheye_boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
+        self._rng = np.random.RandomState(42)
         self._profile_enabled, self._profile_stats = False, {}
         self.reset_profile_stats()
 
     def _checkpoint_metadata(self) -> Dict[str, object]:
-        return {'model_class': 'HRMEdgePredictor', 'x_pixels': self.x_pixels, 'y_depth': self.y_depth, 'curvature': self.curvature, 'h_dim': self.h_dim, 'z_dim': self.z_dim, 'num_nodes': int(self.num_nodes or 0), 'prediction_depth': self.prediction_depth, 'H_layers': self.H_layers, 'L_layers': self.L_layers, 'H_cycles': self.H_cycles, 'L_cycles': self.L_cycles}
+        return {'model_class': 'HRMEdgePredictor', 'x_pixels': self.x_pixels, 'y_depth': self.y_depth, 'curvature': self.curvature, 'h_dim': self.h_dim, 'z_dim': self.z_dim, 'num_nodes': int(self.num_nodes or 0), 'prediction_depth': self.prediction_depth, 'H_layers': self.H_layers, 'L_layers': self.L_layers, 'H_cycles': self.H_cycles, 'L_cycles': self.L_cycles, 'max_bag_slots': self.max_bag_slots, 'stochastic_fisheye': self.stochastic_fisheye}
 
     def model_cas_signature(self) -> Optional[str]: return _checkpoint_cas(self._checkpoint_metadata(), self._model.state_dict()) if self._model else None
 
     def _reset_edge_runtime_state(self):
-        self._close_buffer, self._prediction_queue, self._carry, self._edge_observation_count, self._observed_edges_for_bar, self._last_price_bar_idx = {e: [] for e in self.edge_names}, {e:[] for e in self.edge_names}, {e: None for e in self.edge_names}, {e: 0 for e in self.edge_names},[], None
+        self._graph = None
+        self._edge_bar_idx = {e: -1 for e in self.edge_names}
+        self._prediction_queue, self._carry, self._observed_edges_for_bar, self._last_price_bar_idx, self._kline_view, self._kline_live = {e:[] for e in self.edge_names}, {e: None for e in self.edge_names},[], None, {e: {} for e in self.edge_names}, {e: False for e in self.edge_names}
+
+    def _build_optimizer(self):
+        self._optimizer = torch.optim.AdamW(self._model.parameters(), lr=self._lr, weight_decay=0.01)
+        self._scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self._optimizer, T_0=50, T_mult=2, eta_min=self._lr * 0.01)
+
+    def set_lr_multiplier(self, multiplier: float):
+        """Scale the base LR in optimizer param groups. Resets on multiplier=1.0."""
+        if self._optimizer is None: return
+        target_lr = self._lr * float(multiplier)
+        for pg in self._optimizer.param_groups:
+            pg['lr'] = target_lr
 
     def _build_model(self):
         self._device = get_device(self.device_preference)
-        self._model = HRMEdgePredictor(self.x_pixels, self.h_dim, max(1, self.num_nodes or len(self.node_names) or 1), max(1, self.h_dim // 64), self.H_layers, self.L_layers, self.H_cycles, self.L_cycles).to(self._device)
-        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+        self._model = HRMEdgePredictor(self.x_pixels, self.h_dim, max(1, self.num_nodes or len(self.node_names) or 1), max(1, self.h_dim // 64), self.H_layers, self.L_layers, self.H_cycles, self.L_cycles, max_bag_slots=self.max_bag_slots).to(self._device)
+        self._build_optimizer()
         self._max_history = max(self.y_depth + 100, 500)
         self._reset_edge_runtime_state()
 
     def _apply_checkpoint_config(self, state: Dict):
         for k, v in state.items():
-            if k in['x_pixels', 'y_depth', 'curvature', 'h_dim', 'z_dim', 'num_nodes', 'prediction_depth', 'H_layers', 'L_layers', 'H_cycles', 'L_cycles'] and v is not None: setattr(self, k, v)
+            if k in['x_pixels', 'y_depth', 'curvature', 'h_dim', 'z_dim', 'num_nodes', 'prediction_depth', 'H_layers', 'L_layers', 'H_cycles', 'L_cycles', 'max_bag_slots', 'stochastic_fisheye'] and v is not None: setattr(self, k, v)
         self._max_history = max(self.y_depth + 100, 500)
         self._fisheye_boundaries = fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature)
 
@@ -401,11 +504,68 @@ class HierarchicalReasoningModel:
     def bind_spend_budgets(pred_df: pd.DataFrame, node_state_df: pd.DataFrame) -> pd.DataFrame:
         return bind_spend_budgets(pred_df, node_state_df)
 
-    def _get_fisheye(self, edge: Tuple[str, ...]) -> List[float]:
-        closes = self._close_buffer.get(edge, [])
-        if len(closes) < self.y_depth: return[0.0] * self.x_pixels
-        values = fisheye_sample(np.asarray(closes[-self.y_depth:], dtype=np.float32), self._fisheye_boundaries)[:self.x_pixels]
+    def _obs_count(self, graph, edge: Tuple[str, ...], bar_idx: int) -> int:
+        """Count of DataFrame rows seen up to and including bar_idx. Pandas-only."""
+        df = graph.edges.get(edge)
+        if df is None or bar_idx < 0 or bar_idx >= len(graph.common_timestamps):
+            return 0
+        ts = graph.common_timestamps[bar_idx]
+        if ts not in df.index:
+            return 0
+        return df.index.get_loc(ts) + 1
+
+    def _get_closes(self, graph, edge: Tuple[str, ...], bar_idx: int) -> np.ndarray:
+        """Read close prices directly from graph.edges DataFrame. Pandas-only."""
+        df = graph.edges.get(edge)
+        if df is None or bar_idx < 0:
+            return np.array([], dtype=np.float32)
+        ts = graph.common_timestamps[bar_idx] if bar_idx < len(graph.common_timestamps) else None
+        if ts is None or ts not in df.index:
+            return np.array([], dtype=np.float32)
+        # Slice up to and including bar_idx
+        loc = df.index.get_loc(ts)
+        if loc is None:
+            return np.array([], dtype=np.float32)
+        start = max(0, loc + 1 - self._max_history)
+        rows = df.iloc[start:loc + 1]
+        if hasattr(graph, 'edge_price_components'):
+            closes = []
+            for _, row in rows.iterrows():
+                comp = graph.edge_price_components(edge, row)
+                closes.append(float(comp["close"]))
+            return np.asarray(closes, dtype=np.float32)
+        c = rows['close'].values.astype(np.float32)
+        if getattr(graph, 'edge_is_inverted', {}).get(edge, False):
+            c = np.where(c > 0, 1.0 / c, c)
+        return c
+
+    def _get_fisheye(self, graph, edge: Tuple[str, ...], bar_idx: int) -> List[float]:
+        closes = self._get_closes(graph, edge, bar_idx)
+        if len(closes) < self.y_depth: return [0.0] * self.x_pixels
+        rng = self._rng if self.stochastic_fisheye else None
+        boundaries = stochastic_fisheye_boundaries(self.y_depth, self.x_pixels, self.curvature, rng)
+        values = fisheye_sample(closes[-self.y_depth:], boundaries)[:self.x_pixels]
         return values + [0.0] * (self.x_pixels - len(values))
+
+    def _bag_one_hot(self, active_edges: List[Tuple[str, ...]]) -> Tensor:
+        """Build bag slot one-hot: which edges in the bag are active this bar.
+        Random ordering (shuffle) to prevent position bias."""
+        edge_set = set(active_edges)
+        n_slots = min(len(self.edge_names), self.max_bag_slots)
+        indices = list(range(n_slots))
+        self._rng.shuffle(indices)
+        one_hot = torch.zeros(len(active_edges), self.max_bag_slots, device=self._device)
+        for i, edge in enumerate(active_edges):
+            if edge in self.edge_names:
+                slot = self.edge_names.index(edge)
+                if slot < self.max_bag_slots:
+                    one_hot[i, indices[slot] % self.max_bag_slots] = 1.0
+        return one_hot
+
+    def _time_features_batch(self, bar_idx: int, batch_size: int) -> Tensor:
+        """Compute time cyclical features for a batch."""
+        features = time_cyclical_features(bar_idx)
+        return torch.tensor([features] * batch_size, dtype=torch.float32, device=self._device)
 
     def reset_profile_stats(self): self._profile_stats = {k: 0.0 for k in['bars_observed', 'stale_frames_dropped', 'update_prices_seconds', 'predict_batches', 'predict_edges', 'predict_prepare_seconds', 'predict_forward_seconds', 'update_batches', 'update_edges', 'update_prepare_seconds', 'update_forward_backward_seconds']}
     def set_profile_enabled(self, enabled: bool): self._profile_enabled = enabled; self.reset_profile_stats()
@@ -419,11 +579,14 @@ class HierarchicalReasoningModel:
 
     def ready_for_prediction(self, bar_idx: Optional[int] = None) -> bool:
         if bar_idx is not None and self._last_price_bar_idx != bar_idx: return False
-        return any(len(self._close_buffer.get(e,[])) >= self.y_depth for e in self._observed_edges_for_bar)
+        if self._graph is None: return False
+        bi = self._last_price_bar_idx or 0
+        return any(len(self._get_closes(self._graph, e, bi)) >= self.y_depth for e in self._observed_edges_for_bar)
 
     def _matured_prediction_frame(self, edge: Tuple[str, str], graph=None) -> Optional[Dict]:
         queue = self._prediction_queue.get(edge,[])
-        observed = self._edge_observation_count.get(edge, 0)
+        bar_idx = self._edge_bar_idx.get(edge, -1)
+        observed = self._obs_count(graph, edge, bar_idx) if graph is not None else 0
         while queue and observed - queue[0]['observation_count'] > self.prediction_depth:
             queue.pop(0)
             self._record_profile('stale_frames_dropped', 1.0)
@@ -431,32 +594,104 @@ class HierarchicalReasoningModel:
         frame = queue[0]
         if observed - frame['observation_count'] >= self.prediction_depth: return frame
         if graph is not None and frame.get('start_price', 0) > 0:
-            cum_return = (self._close_buffer[edge][-1] / frame['start_price']) - 1.0
-            st = getattr(graph, "edge_state", {}).get(edge)
-            if st and (cum_return >= getattr(st, "ptt", float('inf')) or cum_return <= getattr(st, "stop", float('-inf'))): return frame
+            closes = self._get_closes(graph, edge, bar_idx)
+            if len(closes) > 0:
+                cum_return = (closes[-1] / frame['start_price']) - 1.0
+                st = getattr(graph, "edge_state", {}).get(edge)
+                if st and (cum_return >= getattr(st, "ptt", float('inf')) or cum_return <= getattr(st, "stop", float('-inf'))): return frame
         return None
 
     def ready_for_update(self, bar_idx: Optional[int] = None, actual_accels=None, graph=None) -> bool:
         if bar_idx is not None and self._last_price_bar_idx != bar_idx: return False
-        return any(self._matured_prediction_frame(e, graph) is not None for e in (actual_accels.keys() if actual_accels else self._observed_edges_for_bar))
+        edges = actual_accels.keys() if actual_accels else self._observed_edges_for_bar
+        return any(self._matured_prediction_frame(e, graph) is not None for e in edges)
+
+    def force_update(self, graph, edge_accels, bar_idx: int, actual_velocities=None, hit_ptt=None, hit_stop=None) -> Optional[float]:
+        """Force a training step from current observations, bypassing the prediction queue.
+
+        Used when the model has been idle (no matured predictions) and needs to restart
+        gradient flow. Synthesizes a target from the current bar's velocity.
+        """
+        if not self.edge_names or self._model is None or self._optimizer is None:
+            return None
+        if bar_idx >= 0 and self._last_price_bar_idx != bar_idx:
+            return None
+        # Find edges with enough data to build fisheye (pandas check)
+        usable = [e for e in edge_accels if e in self._edge_bar_idx and len(self._get_closes(graph, e, bar_idx)) >= self.y_depth]
+        if not usable:
+            return None
+        fisheye_rows = [self._get_fisheye(graph, e, bar_idx) for e in usable]
+        base_idx_batch, quote_idx_batch = self._edge_index_batch(usable)
+        time_feat = self._time_features_batch(bar_idx, len(usable))
+        bag_oh = self._bag_one_hot(usable)
+        input_carry = self._model.init_carry(len(usable), self._device)
+        for idx, e in enumerate(usable):
+            if self._carry.get(e):
+                input_carry.z_H[idx:idx+1], input_carry.z_L[idx:idx+1] = self._carry[e].z_H, self._carry[e].z_L
+        fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
+        # Target: current velocity from edge_accels
+        vel_targets = [edge_accels.get(e, 0.0) for e in usable]
+        velocities_tensor = torch.as_tensor(np.asarray(vel_targets, dtype=np.float32), device=self._device)
+        self._optimizer.zero_grad(set_to_none=True)
+        pred_fraction, pred_tpp, pred_bid, pred_sl, output_carry = self._model(
+            fisheye_batch, base_idx_batch, quote_idx_batch, input_carry, time_feat, bag_oh)
+        for idx, e in enumerate(usable):
+            self._carry[e] = HRMEdgeCarry(
+                z_H=output_carry.z_H[idx:idx+1].detach().clone(),
+                z_L=output_carry.z_L[idx:idx+1].detach().clone())
+            # Also enqueue so normal pipeline can resume
+            closes = self._get_closes(graph, e, bar_idx)
+            obs_count = self._obs_count(graph, e, bar_idx)
+            self._prediction_queue[e].append({
+                'fisheye': fisheye_rows[idx], 'bar_idx': bar_idx,
+                'observation_count': obs_count,
+                'carry': HRMEdgeCarry(
+                    z_H=input_carry.z_H[idx:idx+1].detach().clone(),
+                    z_L=input_carry.z_L[idx:idx+1].detach().clone()),
+                'start_price': float(closes[-1]) if len(closes) > 0 else 1.0,
+            })
+        import torch.nn.functional as F
+        allocations = pred_bid * torch.abs(pred_fraction)
+        hit_ptt_tensor = torch.as_tensor(
+            np.asarray([1.0 if (hit_ptt or {}).get(e, False) else 0.0 for e in usable], dtype=np.float32),
+            device=self._device)
+        hit_stop_tensor = torch.as_tensor(
+            np.asarray([1.0 if (hit_stop or {}).get(e, False) else 0.0 for e in usable], dtype=np.float32),
+            device=self._device)
+        reward = allocations * velocities_tensor * 1000.0
+        pnl_loss = -torch.mean(torch.log1p(F.relu(reward)) - 2.0 * torch.log1p(F.relu(-reward)))
+        tpp_loss = F.binary_cross_entropy(pred_tpp, hit_ptt_tensor)
+        sl_loss = F.binary_cross_entropy(pred_sl, hit_stop_tensor)
+        loss = (pnl_loss * 10.0) + tpp_loss + sl_loss
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+        self._optimizer.step()
+        self._scheduler.step()
+        self._record_profile('update_batches', 1.0)
+        self._record_profile('update_edges', float(len(usable)))
+        return float(loss.item())
 
     def update_prices(self, graph, bar_idx: int) -> List[Tuple[str, str]]:
         start = time.perf_counter() if self._profile_enabled else None
-        if bar_idx < 0 or bar_idx >= len(graph.common_timestamps): self._last_price_bar_idx = None; self._observed_edges_for_bar = []; return[]
+        if bar_idx < 0 or bar_idx >= len(graph.common_timestamps): self._last_price_bar_idx = None; self._observed_edges_for_bar = []; return []
+        # Pandas-only: store graph reference for all reads
+        self._graph = graph
         ts = graph.common_timestamps[bar_idx]
-        observed_edges =[]
+        observed_edges = []
         for edge in self.edge_names:
             df = graph.edges.get(edge)
             if df is None or ts not in df.index: continue
-            row = df.loc[ts]
-            if isinstance(row, pd.DataFrame): row = row.iloc[-1]
-            close = float(graph.edge_price_components(edge, row)["close"]) if hasattr(graph, "edge_price_components") else float(row.get("close", 0.0))
-            if not hasattr(graph, "edge_price_components") and getattr(graph, "edge_is_inverted", {}).get(edge, False) and close > 0: close = 1.0 / close
-            buf = self._close_buffer[edge]
-            buf.append(close)
-            if len(buf) > self._max_history: del buf[:-self._max_history]
-            self._edge_observation_count[edge] += 1
+            self._edge_bar_idx[edge] = bar_idx
             observed_edges.append(edge)
+        # Store kline_view pancake for each observed edge (stateless per bar)
+        if observed_edges:
+            try:
+                from kline_view import decorate_view, is_live_bar
+                for edge in observed_edges:
+                    self._kline_view[edge] = decorate_view(graph, edge, bar_idx, horizon_width=self.x_pixels)
+                    self._kline_live[edge] = is_live_bar(graph, edge, bar_idx)
+            except ImportError:
+                pass
         self._last_price_bar_idx, self._observed_edges_for_bar = bar_idx, observed_edges
         self._record_profile('bars_observed', 1.0)
         if start is not None: self._record_profile('update_prices_seconds', time.perf_counter() - start)
@@ -466,12 +701,14 @@ class HierarchicalReasoningModel:
         self, graph, bar_idx: int = -1
     ) -> Dict[Tuple[str, str], Tuple[float, float, float, float]]:
         if not self.edge_names or self._model is None: return {}
-        ready_edges =[e for e in self._observed_edges_for_bar if len(self._close_buffer.get(e, [])) >= self.y_depth]
+        ready_edges = [e for e in self._observed_edges_for_bar if len(self._get_closes(graph, e, bar_idx)) >= self.y_depth]
         if not ready_edges: return {}
         prep_start = time.perf_counter() if self._profile_enabled else None
-        fisheye_rows = [self._get_fisheye(e) for e in ready_edges]
+        fisheye_rows = [self._get_fisheye(graph, e, bar_idx) for e in ready_edges]
         fisheye_batch = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device)
         base_idx_batch, quote_idx_batch = self._edge_index_batch(ready_edges)
+        time_feat = self._time_features_batch(bar_idx, len(ready_edges))
+        bag_oh = self._bag_one_hot(ready_edges)
         input_carry = self._model.init_carry(len(ready_edges), self._device)
         for idx, e in enumerate(ready_edges):
             if self._carry.get(e): input_carry.z_H[idx:idx+1], input_carry.z_L[idx:idx+1] = self._carry[e].z_H, self._carry[e].z_L
@@ -479,46 +716,52 @@ class HierarchicalReasoningModel:
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
         with torch.no_grad():
-            fraction, ptt, limit, stop, output_carry = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, input_carry)
+            fraction, tpp_out, bid_out, sl_out, output_carry = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, input_carry, time_feat, bag_oh)
         self._sync_device_for_profile()
         if fwd_start: self._record_profile('predict_forward_seconds', time.perf_counter() - fwd_start)
         self._record_profile('predict_batches', 1.0); self._record_profile('predict_edges', float(len(ready_edges)))
         fractions = fraction.detach().cpu().tolist()
-        ptts = ptt.detach().cpu().tolist()
-        limits = limit.detach().cpu().tolist()
-        stops = stop.detach().cpu().tolist()
+        tpps = tpp_out.detach().cpu().tolist()
+        bids = bid_out.detach().cpu().tolist()
+        sls = sl_out.detach().cpu().tolist()
         predictions = {}
         for idx, e in enumerate(ready_edges):
             predictions[e] = (
                 float(fractions[idx]),
-                float(ptts[idx]),
-                float(limits[idx]),
-                float(stops[idx]),
+                float(tpps[idx]),
+                float(bids[idx]),
+                float(sls[idx]),
             )
             self._carry[e] = HRMEdgeCarry(z_H=output_carry.z_H[idx:idx+1].detach().clone(), z_L=output_carry.z_L[idx:idx+1].detach().clone())
-            self._prediction_queue[e].append({'fisheye': fisheye_rows[idx], 'bar_idx': bar_idx, 'observation_count': self._edge_observation_count[e], 'carry': HRMEdgeCarry(z_H=input_carry.z_H[idx:idx+1].detach().clone(), z_L=input_carry.z_L[idx:idx+1].detach().clone()), 'start_price': self._close_buffer[e][-1] if self._close_buffer.get(e) else 1.0})
+            closes_e = self._get_closes(graph, e, bar_idx)
+            obs_count = self._obs_count(graph, e, bar_idx)
+            self._prediction_queue[e].append({'fisheye': fisheye_rows[idx], 'bar_idx': bar_idx, 'observation_count': obs_count, 'carry': HRMEdgeCarry(z_H=input_carry.z_H[idx:idx+1].detach().clone(), z_L=input_carry.z_L[idx:idx+1].detach().clone()), 'start_price': float(closes_e[-1]) if len(closes_e) > 0 else 1.0})
         return predictions
 
-    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1, actual_velocities=None, hit_ptt=None, hit_stop=None, loss_multiplier: float = 1.0) -> Optional[float]:
+    def update(self, graph, actual_accels: Dict[Tuple[str, str], float], bar_idx: int = -1, actual_velocities=None, hit_ptt=None, hit_stop=None) -> Optional[float]:
         if not self.edge_names or self._model is None or self._optimizer is None or hit_ptt is None or hit_stop is None or (bar_idx >= 0 and self._last_price_bar_idx != bar_idx): return None
         prep_start = time.perf_counter() if self._profile_enabled else None
         matured_edges, fisheye_rows, carry_rows, velocity_targets = [], [], [],[]
         for edge in actual_accels:
             frame = self._matured_prediction_frame(edge, graph)
             if not frame: continue
-            vel = ((self._close_buffer[edge][-1] / frame.get('start_price', 1.0)) - 1.0) / max(1, self._edge_observation_count.get(edge, 1) - frame['observation_count']) if frame.get('start_price', 0) > 0 else 0.0
+            closes_e = self._get_closes(graph, edge, bar_idx)
+            obs_count = self._obs_count(graph, edge, bar_idx)
+            vel = ((float(closes_e[-1]) / frame.get('start_price', 1.0)) - 1.0) / max(1, obs_count - frame['observation_count']) if frame.get('start_price', 0) > 0 and len(closes_e) > 0 else 0.0
             matured_edges.append(edge); fisheye_rows.append(frame['fisheye']); carry_rows.append(frame['carry']); velocity_targets.append(vel)
         if not matured_edges: return None
         fisheye_batch, velocities_tensor = torch.as_tensor(np.asarray(fisheye_rows, dtype=np.float32), device=self._device), torch.as_tensor(np.asarray(velocity_targets, dtype=np.float32), device=self._device)
         base_idx_batch, quote_idx_batch = self._edge_index_batch(matured_edges)
+        time_feat = self._time_features_batch(bar_idx, len(matured_edges))
+        bag_oh = self._bag_one_hot(matured_edges)
         carry_batch = HRMEdgeCarry(z_H=torch.cat([c.z_H for c in carry_rows], dim=0), z_L=torch.cat([c.z_L for c in carry_rows], dim=0))
         if prep_start: self._record_profile('update_prepare_seconds', time.perf_counter() - prep_start)
         self._optimizer.zero_grad(set_to_none=True)
         self._sync_device_for_profile()
         fwd_start = time.perf_counter() if self._profile_enabled else None
-        # Fraction is the signed allocation head; PTT and STOP remain event heads.
-        pred_fraction, pred_ptt, pred_limit, pred_stop, _ = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, carry_batch)
-        allocations = pred_fraction * torch.abs(pred_ptt - pred_stop)
+        # Fraction is position size (tanh); bid is direction (tanh, +buy/-sell); tpp/sl are event heads.
+        pred_fraction, pred_tpp, pred_bid, pred_sl, _ = self._model(fisheye_batch, base_idx_batch, quote_idx_batch, carry_batch, time_feat, bag_oh)
+        allocations = pred_bid * torch.abs(pred_fraction)
 
         hit_ptt_tensor = torch.as_tensor(
             np.asarray([1.0 if hit_ptt.get(edge, False) else 0.0 for edge in matured_edges], dtype=np.float32),
@@ -529,60 +772,34 @@ class HierarchicalReasoningModel:
             device=self._device,
         )
 
-        # 1) Direction loss on the signed allocation head.
-        target_direction = torch.sign(velocities_tensor)
-        dir_loss = F.mse_loss(pred_fraction, target_direction)
+        # Reward-based loss: the model learns from realized PnL only.
+        # allocation * velocity = profit (positive = money made).
+        # We scale velocity by 1000 so the gradient signal is meaningful.
+        reward = allocations * velocities_tensor * 1000.0
 
-        # 2) Train PTT/STOP directly against realized event hits.
-        ptt_loss = F.binary_cross_entropy(pred_ptt, hit_ptt_tensor)
-        stop_loss = F.binary_cross_entropy(pred_stop, hit_stop_tensor)
+        # PnL loss: maximize reward. Use log1p for stability, asymmetric
+        # so losses hurt more than wins feel good (risk-aware).
+        pnl_positive = torch.log1p(F.relu(reward))
+        pnl_negative = -2.0 * torch.log1p(F.relu(-reward))
+        pnl_loss = -torch.mean(pnl_positive + pnl_negative)
 
-        # 3) LIMIT learns a bounded entry aggressiveness prior from realized move size.
-        realized_vol = torch.clamp(torch.abs(velocities_tensor) * 200.0, 0.0, 1.0)
-        limit_loss = F.mse_loss(pred_limit, realized_vol)
+        # TPP/SL event heads train against realized events (auxiliary).
+        tpp_loss = F.binary_cross_entropy(pred_tpp, hit_ptt_tensor)
+        sl_loss = F.binary_cross_entropy(pred_sl, hit_stop_tensor)
 
-        # 4) Magnitude calibration: neutral bars should keep allocation near zero.
-        magnitude_loss = F.mse_loss(torch.abs(allocations), realized_vol)
-
-        # 5) PnL Surrogate (log-style to reward consistent winners)
-        pnl_gain = torch.log1p(torch.abs(allocations * velocities_tensor))
-        pnl_loss = -torch.mean(torch.sign(allocations * velocities_tensor) * pnl_gain)
-
-        # 6) Budget / regularization penalties (keep allocation magnitudes sensible)
-        budget_penalty = F.relu(torch.sum(torch.abs(allocations)) - 1.0) * 10.0
-
-        loss = (
-            (dir_loss * 2.0)
-            + ptt_loss
-            + limit_loss
-            + stop_loss
-            + magnitude_loss
-            + (pnl_loss * 100.0)
-            + budget_penalty
-        )
-
-        # Apply external multiplier (e.g., amplify learning on parking/augmentation events)
-        try:
-            if loss_multiplier is None:
-                loss_multiplier = 1.0
-            if float(loss_multiplier) != 1.0:
-                loss = loss * float(loss_multiplier)
-        except Exception:
-            # If anything goes wrong with multiplier handling, fall back silently
-            pass
+        loss = (pnl_loss * 10.0) + tpp_loss + sl_loss
 
         loss.backward()
-        # Gradient clipping to avoid exploding updates on high-hopium bars
         torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
         self._optimizer.step()
-        self._sync_device_for_profile()
+        self._scheduler.step()
         if fwd_start: self._record_profile('update_forward_backward_seconds', time.perf_counter() - fwd_start)
         self._record_profile('update_batches', 1.0); self._record_profile('update_edges', float(len(matured_edges)))
         for e in matured_edges: self._prediction_queue[e].pop(0)
         return float(loss.item())
 
     def save(self, path: str = "model_weights.pt", checkpoint_type: str = "pretrained"):
-        if self._model: torch.save({'model': self._model.state_dict(), 'x_pixels': self.x_pixels, 'y_depth': self.y_depth, 'curvature': self.curvature, 'h_dim': self.h_dim, 'z_dim': self.z_dim, 'num_nodes': int(self.num_nodes or 0), 'prediction_depth': self.prediction_depth, 'H_layers': self.H_layers, 'L_layers': self.L_layers, 'H_cycles': self.H_cycles, 'L_cycles': self.L_cycles, 'checkpoint_timestamp': __import__('datetime').datetime.now().isoformat(), 'checkpoint_type': checkpoint_type, 'model_cas': self.model_cas_signature()}, path)
+        if self._model: torch.save({'model': self._model.state_dict(), 'x_pixels': self.x_pixels, 'y_depth': self.y_depth, 'curvature': self.curvature, 'h_dim': self.h_dim, 'z_dim': self.z_dim, 'num_nodes': int(self.num_nodes or 0), 'prediction_depth': self.prediction_depth, 'H_layers': self.H_layers, 'L_layers': self.L_layers, 'H_cycles': self.H_cycles, 'L_cycles': self.L_cycles, 'max_bag_slots': self.max_bag_slots, 'stochastic_fisheye': self.stochastic_fisheye, 'checkpoint_timestamp': __import__('datetime').datetime.now().isoformat(), 'checkpoint_type': checkpoint_type, 'model_cas': self.model_cas_signature()}, path)
 
     def load(self, path: str = "model_weights.pt"):
         if not Path(path).exists(): return
@@ -606,5 +823,5 @@ class HierarchicalReasoningModel:
             self._model.grow_cycles('H' if dim == 'Hc' else 'L')
             if dim == 'Hc': self.H_cycles = self._model.H_cycles
             else: self.L_cycles = self._model.L_cycles
-        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+        self._build_optimizer()
         self._reset_edge_runtime_state()

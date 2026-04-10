@@ -241,19 +241,6 @@ class SimWallet:
             self.snapshot(graph, bar_idx=bar_idx, label=label)
         return created
 
-    def _settlement_amount(self, order: OrderShim, exit_price: float, fee_rate: float) -> float:
-        entry = max(0.0, float(order.price))
-        exit_price = max(0.0, float(exit_price))
-        spend_qty = max(0.0, float(order.amt))
-        if entry <= 0.0 or exit_price <= 0.0 or spend_qty <= 0.0:
-            return spend_qty
-        try:
-            velocity = math.log(exit_price / entry)
-        except ValueError:
-            return spend_qty
-        signed_velocity = velocity if order.is_buy else -velocity
-        return spend_qty * math.exp(signed_velocity - max(0.0, float(fee_rate)))
-
     def settle_due_orders(self, graph: Any, *, bar_idx: int, fee_rate: float) -> Dict[str, Any]:
         worth_before = self.worth(graph, bar_idx)
         settled = 0
@@ -303,22 +290,55 @@ class SimWallet:
                     remaining.append(order)
                     continue
 
-                return_amt = self._settlement_amount(order, exit_price, fee_rate)
-                balance.free += return_amt
-                settled += 1
-                self._record(
-                    "order_settled",
-                    bar_idx=bar_idx,
-                    asset=order.spend_asset,
-                    side="BUY" if order.is_buy else "SELL",
-                    edge=order.edge,
-                    spend_amt=order.amt,
-                    return_amt=return_amt,
-                    pnl_asset=return_amt - order.amt,
-                    entry_price=order.price,
-                    exit_price=exit_price,
-                    free_after=balance.free,
-                )
+                _, base_asset, quote_asset = _parse_edge(order.edge)
+
+                if order.is_buy:
+                    # BUY: spent quote (USDT), receive base (ETH/BTC/...)
+                    # credit base asset after fee
+                    entry_price = max(1e-30, float(order.price))
+                    fee_mult = math.exp(-max(0.0, float(fee_rate)))
+                    base_qty = (float(order.amt) / entry_price) * fee_mult
+                    base_bal = self.balance(base_asset)
+                    base_bal.free += base_qty
+                    settled += 1
+                    self._record(
+                        "order_settled",
+                        bar_idx=bar_idx,
+                        asset=order.spend_asset,
+                        side="BUY",
+                        edge=order.edge,
+                        spend_amt=order.amt,
+                        base_asset=base_asset,
+                        base_qty=base_qty,
+                        entry_price=order.price,
+                        exit_price=exit_price,
+                        fee_mult=fee_mult,
+                        free_quote_after=balance.free,
+                        free_base_after=base_bal.free,
+                    )
+                else:
+                    # SELL: spent base (ETH/BTC/...), receive quote (USDT)
+                    entry_price = max(1e-30, float(order.price))
+                    fee_mult = math.exp(-max(0.0, float(fee_rate)))
+                    quote_qty = (float(order.amt) * exit_price / entry_price) * fee_mult
+                    quote_bal = self.balance(quote_asset)
+                    quote_bal.free += quote_qty
+                    settled += 1
+                    self._record(
+                        "order_settled",
+                        bar_idx=bar_idx,
+                        asset=order.spend_asset,
+                        side="SELL",
+                        edge=order.edge,
+                        spend_amt=order.amt,
+                        quote_asset=quote_asset,
+                        quote_qty=quote_qty,
+                        entry_price=order.price,
+                        exit_price=exit_price,
+                        fee_mult=fee_mult,
+                        free_base_after=balance.free,
+                        free_quote_after=quote_bal.free,
+                    )
             balance.order_list = remaining
         self._worth_cache = None
         self._route_cache = None

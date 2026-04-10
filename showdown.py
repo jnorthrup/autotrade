@@ -83,12 +83,13 @@ def _init_wallet(graph: CoinGraph, capital: float) -> SimWallet:
 def _orders_from_predictions(
     wallet: SimWallet,
     graph: CoinGraph,
-    predictions: Dict[Tuple[str, str, str], Tuple[float, float, float]],
+    predictions: Dict[Tuple[str, str, str], Tuple[float, float, float, float]],
     *,
     bar_idx: int,
     prediction_depth: int,
-    threshold: float = 0.55,
 ) -> List[OrderShim]:
+    """Convert model predictions to orders.  predictions values are
+    (fraction, tpp, bid, sl)."""
     if not predictions:
         return []
 
@@ -97,21 +98,23 @@ def _orders_from_predictions(
     prepared: List[Tuple[Tuple[str, str, str], bool, str, float, float, float]] = []
 
     for edge, raw in predictions.items():
-        frac, ptt, stop = (float(raw[0]), float(raw[1]), float(raw[2]))
-        frac = min(1.0, max(0.0, frac))
+        frac, tpp, bid, sl = (float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+        if bid == 0.0:
+            continue
+        frac = min(1.0, abs(frac))
         if frac <= 0.0:
             continue
-        is_buy = ptt > threshold and ptt >= stop
-        is_sell = stop > threshold and stop > ptt
-        if not is_buy and not is_sell:
-            continue
+        is_buy = bid > 0
         price = wallet.edge_price(graph, edge, bar_idx)
         if price <= 0.0:
             continue
         _, base_asset, quote_asset = edge
         spend_asset = quote_asset if is_buy else base_asset
+        free = free_before.get(spend_asset, 0.0)
+        if free <= 0.0:
+            continue
         requested_by_asset[spend_asset] = requested_by_asset.get(spend_asset, 0.0) + frac
-        prepared.append((edge, is_buy, spend_asset, frac, max(ptt, stop), price))
+        prepared.append((edge, is_buy, spend_asset, frac, abs(bid), price))
 
     orders: List[OrderShim] = []
     for edge, is_buy, spend_asset, frac, confidence, price in prepared:
@@ -326,33 +329,8 @@ def _profit_based_loss(
     total_pnl = current_balance - capital
     max_pnl = max(max_pnl, total_pnl)
     pnl_history.append(bar_pnl)
-    # Base loss: penalize negative bar PnL (intrabar loss)
-    loss = abs(bar_pnl) / max(capital, 1.0) if bar_pnl < 0 else 0.0
-    # Strong, explicit drawdown penalty so wiping out capital yields a large loss
-    try:
-        normalized_drawdown = max(0.0, (float(capital) - float(current_balance)) / max(float(capital), 1.0))
-    except Exception:
-        normalized_drawdown = 0.0
-    # Make a wipeout (current_balance == 0) count as a full 1.0 loss by default
-    loss += normalized_drawdown * 1.0
-    # Penalize having too little of the portfolio in the value asset (e.g., USD)
-    try:
-        route_vals = wallet._route_values(graph, bar_idx)
-        value_asset = getattr(wallet, "value_asset", None)
-        value_asset_qty = float(wallet.balance(value_asset).total) if value_asset is not None else 0.0
-        value_asset_value = value_asset_qty * float(route_vals.get(value_asset, 1.0)) if value_asset is not None else 0.0
-        fraction_value_asset = value_asset_value / max(current_balance, 1e-12) if current_balance > 0.0 else 0.0
-    except Exception:
-        fraction_value_asset = 1.0
-    # If less than 5% in value asset, add a penalty that scales with the shortfall
-    min_value_frac = 0.05
-    if fraction_value_asset < min_value_frac:
-        loss += (min_value_frac - fraction_value_asset) * 2.0
-    # NOTE: paralysis/inactivity and stagnation penalties removed to let PnL
-    # be the primary differentiable signal. Parking (no open orders) is handled
-    # during training as an amplified update rather than an additive penalty.
-    if max_pnl - total_pnl > 0:
-        loss += (max_pnl - total_pnl) / max(capital, 1.0) * 0.01
+    # The only signal: total PnL. The model is on its own.
+    loss = -total_pnl / max(capital, 1.0)
     return loss, bar_pnl, total_pnl, max_pnl
 
 
@@ -478,11 +456,9 @@ def run_walk_forward_validation(
             if mature_idx in active_predictions:
                 bar_pnl = sum(
                     (capital + total_pnl) * frac * (vel - eval_graph.fee_rate)
-                    if ptt > 0.55
+                    if bid > 0
                     else (capital + total_pnl) * frac * (-vel - eval_graph.fee_rate)
-                    if stop > 0.55
-                    else 0.0
-                    for edge, (frac, ptt, stop) in active_predictions.pop(
+                    for edge, (frac, tpp, bid, sl) in active_predictions.pop(
                         mature_idx
                     ).items()
                     if edge in edge_velocities
@@ -495,6 +471,264 @@ def run_walk_forward_validation(
                 total_loss += loss
                 n_updates += 1
     return (total_loss / n_updates, n_updates) if n_updates > 0 else (None, 0)
+
+
+def _run_agent_harness(
+    graph: CoinGraph,
+    agents: List[Tuple[HierarchicalReasoningModel, SimWallet]],
+    sorted_bars: List[int],
+    use_profit_loss: bool = False,
+    print_every: int = 100,
+    capital: float = 100.0,
+) -> List[Tuple[float, float]]:
+    """Run N agents head-to-head on same bars. Returns list of (total_pnl, max_drawdown) per agent."""
+    n_agents = len(agents)
+    # Per-agent state
+    states = []
+    for model, wallet in agents:
+        states.append({
+            "model": model,
+            "wallet": wallet,
+            "total_loss": 0.0,
+            "n_updates": 0,
+            "active_predictions": {},
+            "total_pnl": 0.0,
+            "max_pnl": 0.0,
+            "max_drawdown": 0.0,
+            "pnl_history": [],
+            "last_update_bar": 0,
+            "flat_bars": 0,
+            "dead": False,
+            "pnl_100_ago": 0.0,
+            "pnl_last_report": 0.0,
+        })
+
+    for i, bar_idx in enumerate(sorted_bars):
+        if bar_idx >= len(graph.common_timestamps):
+            break
+        edge_accels, edge_velocities, hit_ptt, hit_stop = graph.update(bar_idx)
+        if not edge_accels:
+            continue
+
+        for s in states:
+            if s["dead"]:
+                continue
+            model, wallet = s["model"], s["wallet"]
+            model.update_prices(graph, bar_idx)
+
+            if use_profit_loss:
+                settlement = wallet.settle_due_orders(
+                    graph, bar_idx=bar_idx, fee_rate=graph.fee_rate
+                )
+                if model.ready_for_prediction(bar_idx):
+                    # BAIL: check if price movement can overcome fees
+                    # Fee is 0.1%, so need at least that much volatility to break even
+                    # Use range-based check: (max - min) / mean > 2 * fee_rate
+                    min_volatility = 2.0 * float(graph.fee_rate)  # 0.002 = 0.2%
+                    can_profit = False
+                    for edge in _canonical_pair_edges(graph):
+                        df = graph.edges.get(edge)
+                        if df is None or len(df) == 0:
+                            continue
+                        start_idx = max(0, len(df) - model.y_depth)
+                        recent = df.iloc[start_idx:]
+                        if len(recent) >= 2:
+                            closes = recent["close"].values
+                            price_range = (closes.max() - closes.min()) / closes.mean()
+                            if price_range > min_volatility:
+                                can_profit = True
+                                break
+                    
+                    if not can_profit:
+                        # Not enough volatility to overcome fees
+                        preds = {}
+                    else:
+                        preds = model.predict(graph, bar_idx)
+                    
+                    wallet.reserve_orders(
+                        _orders_from_predictions(
+                            wallet, graph, preds,
+                            bar_idx=bar_idx,
+                            prediction_depth=model.prediction_depth,
+                        ),
+                        graph=graph, bar_idx=bar_idx,
+                    )
+                train_loss = None
+                if model.ready_for_update(bar_idx, edge_accels, graph=graph):
+                    # Stagnation: crank the actual learning rate, not the loss.
+                    # Scaling loss is pointless — grad clipping normalizes it back.
+                    pnl_hist = s["pnl_history"]
+                    stagnation_window = 20
+                    multiplier = 1.0
+                    if len(pnl_hist) >= stagnation_window:
+                        window = pnl_hist[-stagnation_window:]
+                        window_sum = sum(abs(x) for x in window)
+                        if window_sum < 1e-6:
+                            multiplier = 10.0
+                        else:
+                            window_range = max(window) - min(window)
+                            if window_range < capital * 0.001:
+                                stagnation_ratio = 1.0 - min(1.0, window_range / (capital * 0.001))
+                                multiplier = 1.0 + 9.0 * stagnation_ratio
+                    model.set_lr_multiplier(multiplier)
+                    train_loss = model.update(
+                        graph, edge_accels, bar_idx,
+                        actual_velocities=edge_velocities,
+                        hit_ptt=hit_ptt, hit_stop=hit_stop,
+                    )
+                    model.set_lr_multiplier(1.0)
+                elif s["n_updates"] > 0 and (i - s.get("last_update_bar", 0)) > 50:
+                    # Model has trained before but went dead — force a restart.
+                    # 50 bars with no gradient means the queue is empty and the
+                    # model is frozen. Inject a forced update to restart flow.
+                    train_loss = model.force_update(
+                        graph, edge_accels, bar_idx,
+                        actual_velocities=edge_velocities,
+                        hit_ptt=hit_ptt, hit_stop=hit_stop,
+                    )
+                    if train_loss is not None:
+                        s["last_update_bar"] = i
+                _ploss, bar_pnl, s["total_pnl"], s["max_pnl"] = _profit_based_loss(
+                    wallet, graph, bar_idx=bar_idx,
+                    bar_pnl=settlement["bar_pnl"],
+                    capital=capital, max_pnl=s["max_pnl"],
+                    pnl_history=s["pnl_history"],
+                )
+                s["max_drawdown"] = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"])
+                if train_loss is not None:
+                    s["total_loss"] += train_loss
+                    s["n_updates"] += 1
+                    s["last_update_bar"] = i
+                # Hard exit: wallet worth <= capital for 100 consecutive bars
+                # Only count after model warmup — can't blame the model before it can trade
+                if i >= model.y_depth:
+                    worth = wallet.worth(graph, bar_idx)
+                    if worth <= capital:
+                        s["flat_bars"] += 1
+                    else:
+                        s["flat_bars"] = 0
+                    if s["flat_bars"] >= 100:
+                        s["dead"] = True
+            else:
+                if model.ready_for_prediction(bar_idx):
+                    # BAIL: check if fisheye horizon is flat (no price movement)
+                    flat_horizon = True
+                    for edge in _canonical_pair_edges(graph):
+                        df = graph.edges.get(edge)
+                        if df is None or len(df) == 0:
+                            continue
+                        start_idx = max(0, len(df) - model.y_depth)
+                        recent = df.iloc[start_idx:]
+                        if len(recent) >= 2:
+                            var = recent["close"].var()
+                            if var > 0.001:  # 3% price movement minimum
+                                flat_horizon = False
+                                break
+                    
+                    if flat_horizon:
+                        # Flat market: skip trading
+                        s["active_predictions"][bar_idx] = {}
+                    else:
+                        s["active_predictions"][bar_idx] = model.predict(graph, bar_idx)
+                if model.ready_for_update(bar_idx, edge_accels, graph=graph):
+                    loss = model.update(
+                        graph, edge_accels, bar_idx,
+                        actual_velocities=edge_velocities,
+                        hit_ptt=hit_ptt, hit_stop=hit_stop,
+                    )
+                    if loss is not None:
+                        s["total_loss"] += loss
+                        s["n_updates"] += 1
+                mature_idx = bar_idx - model.prediction_depth
+                if mature_idx in s["active_predictions"]:
+                    bar_pnl = sum(
+                        (capital + s["total_pnl"]) * frac * (vel - graph.fee_rate)
+                        if bid > 0
+                        else (capital + s["total_pnl"]) * frac * (-vel - graph.fee_rate)
+                        for edge, (frac, tpp, bid, sl) in s["active_predictions"].pop(mature_idx).items()
+                        if edge in edge_velocities
+                        for vel in [edge_velocities[edge]]
+                    )
+                    s["total_pnl"] += bar_pnl
+                    s["max_pnl"] = max(s["max_pnl"], s["total_pnl"])
+                    s["max_drawdown"] = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"])
+                # Hard exit in non-profit path: balance at or below capital for 100 bars
+                if i >= model.y_depth:
+                    sim_balance = capital + s["total_pnl"]
+                    if sim_balance <= capital:
+                        s["flat_bars"] += 1
+                    else:
+                        s["flat_bars"] = 0
+                    if s["flat_bars"] >= 100:
+                        s["dead"] = True
+
+        # Bail: all agents dead — print final balances before bailing
+        if all(s["dead"] for s in states):
+            parts = []
+            for ai, s in enumerate(states):
+                bal = s["wallet"].worth(graph, bar_idx) if use_profit_loss else capital + s["total_pnl"]
+                dd = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"]) if use_profit_loss else s["max_drawdown"]
+                parts.append(f"A{ai}: pnl={s['total_pnl']:.2f} bal={bal:.2f} dd={dd:.2f} DEAD(flat={s['flat_bars']})")
+                # DEBUG: dump wallet audit to see what actually happened
+                print(f"\n=== A{ai} WALLET AUDIT (last 50 events) ===", flush=True)
+                for entry in list(s["wallet"].audit)[-50:]:
+                    print(f"  {entry}", flush=True)
+            
+            # STAGNATION AUDIT: show price variance for each pair over recent bars
+            print(f"\n=== STAGNATION AUDIT (bars {max(0, bar_idx-99)}-{bar_idx}) ===", flush=True)
+            for edge in _canonical_pair_edges(graph):
+                exchange, base, quote = edge
+                key = f"{base}-{quote}"
+                df = graph.edges.get(edge)
+                if df is None or len(df) == 0:
+                    continue
+                
+                # Get last 100 bars of data
+                start_idx = max(0, len(df) - 100)
+                recent = df.iloc[start_idx:]
+                if len(recent) == 0:
+                    continue
+                
+                # Calculate variance on close prices
+                closes = recent["close"].values
+                mean_price = closes.mean()
+                std_price = closes.std()
+                var_price = closes.var()
+                min_price = closes.min()
+                max_price = closes.max()
+                range_pct = (max_price - min_price) / mean_price * 100 if mean_price > 0 else 0
+                
+                print(f"  {key}: mean={mean_price:.8f}, std={std_price:.8f}, var={var_price:.8f}, range={min_price:.8f}-{max_price:.8f} ({range_pct:.4f}%)", flush=True)
+            
+            print(f"Harness[{i+1}/{len(sorted_bars)}] Bar {bar_idx} | " + " | ".join(parts) + " — ALL DEAD", flush=True)
+            break
+
+        if (i % print_every == 0 and i > 0) or (i == len(sorted_bars) - 1):
+            # Track pnl from 100 bars ago for incremental profit indicator
+            # Store current pnl before updating pnl_100_ago for comparison
+            for s in states:
+                s["pnl_100_ago"] = s.get("pnl_last_report", 0.0)
+                s["pnl_last_report"] = s["total_pnl"]
+            
+            parts = []
+            for ai, s in enumerate(states):
+                if s["dead"]:
+                    parts.append(f"A{ai}: DEAD(flat={s['flat_bars']})")
+                elif s["n_updates"] > 0:
+                    bal = s["wallet"].worth(graph, bar_idx) if use_profit_loss else capital + s["total_pnl"]
+                    dd = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"]) if use_profit_loss else s["max_drawdown"]
+                    emoji = " 📈" if s["total_pnl"] > s["pnl_100_ago"] else ""
+                    parts.append(f"A{ai}: pnl={s['total_pnl']:.2f} bal={bal:.2f} dd={dd:.2f}{emoji}")
+                    # DEBUG: show wallet state summary
+                    if use_profit_loss:
+                        free = s["wallet"].free_qty_map()
+                        locked = s["wallet"].reserved_qty_map()
+                        parts[-1] += f" free={free} locked={locked}"
+                else:
+                    parts.append(f"A{ai}: warmup")
+            print(f"Harness[{i+1}/{len(sorted_bars)}] Bar {bar_idx} | " + " | ".join(parts), flush=True)
+
+    return [(s["total_pnl"], s["max_drawdown"]) for s in states]
 
 
 def run_training(
@@ -544,11 +778,31 @@ def run_training(
                 graph, bar_idx=bar_idx, fee_rate=graph.fee_rate
             )
             if model.ready_for_prediction(bar_idx):
+                # BAIL: check if fisheye horizon is flat (no price movement)
+                flat_horizon = True
+                for edge in _canonical_pair_edges(graph):
+                    df = graph.edges.get(edge)
+                    if df is None or len(df) == 0:
+                        continue
+                    start_idx = max(0, len(df) - model.y_depth)
+                    recent = df.iloc[start_idx:]
+                    if len(recent) >= 2:
+                        var = recent["close"].var()
+                        if var > 0.001:  # 3% price movement minimum
+                            flat_horizon = False
+                            break
+                
+                if flat_horizon:
+                    # Flat market: skip trading to avoid fee bleed
+                    preds = {}
+                else:
+                    preds = model.predict(graph, bar_idx)
+                
                 wallet.reserve_orders(
                     _orders_from_predictions(
                         wallet,
                         graph,
-                        model.predict(graph, bar_idx),
+                        preds,
                         bar_idx=bar_idx,
                         prediction_depth=model.prediction_depth,
                     ),
@@ -560,12 +814,20 @@ def run_training(
             # predictions can actually move and eventually produce trades.
             train_loss = None
             if model.ready_for_update(bar_idx, edge_accels, graph=graph):
-                # If the wallet currently has no open orders (parking),
-                # amplify the training update so the model learns from PnL
-                # swings rather than being softly penalized. Use a loss
-                # multiplier to control gradient scale while preserving
-                # gradient clipping.
-                multiplier = 5.0 if getattr(wallet, "open_order_count", 0) == 0 else 1.0
+                # Stagnation: crank the actual learning rate, not the loss.
+                stagnation_window = 20
+                multiplier = 1.0
+                if len(pnl_history) >= stagnation_window:
+                    window = pnl_history[-stagnation_window:]
+                    window_sum = sum(abs(x) for x in window)
+                    if window_sum < 1e-6:
+                        multiplier = 10.0
+                    else:
+                        window_range = max(window) - min(window)
+                        if window_range < capital * 0.001:
+                            stagnation_ratio = 1.0 - min(1.0, window_range / (capital * 0.001))
+                            multiplier = 1.0 + 9.0 * stagnation_ratio
+                model.set_lr_multiplier(multiplier)
                 train_loss = model.update(
                     graph,
                     edge_accels,
@@ -573,8 +835,8 @@ def run_training(
                     actual_velocities=edge_velocities,
                     hit_ptt=hit_ptt,
                     hit_stop=hit_stop,
-                    loss_multiplier=multiplier,
                 )
+                model.set_lr_multiplier(1.0)
             _profit_loss, bar_pnl, total_pnl, max_pnl = _profit_based_loss(
                 wallet,
                 graph,
@@ -591,7 +853,25 @@ def run_training(
                 loss_history.append(loss)
         else:
             if model.ready_for_prediction(bar_idx):
-                active_predictions[bar_idx] = model.predict(graph, bar_idx)
+                # BAIL: check if fisheye horizon is flat (no price movement)
+                flat_horizon = True
+                for edge in _canonical_pair_edges(graph):
+                    df = graph.edges.get(edge)
+                    if df is None or len(df) == 0:
+                        continue
+                    start_idx = max(0, len(df) - model.y_depth)
+                    recent = df.iloc[start_idx:]
+                    if len(recent) >= 2:
+                        var = recent["close"].var()
+                        if var > 1e-10:
+                            flat_horizon = False
+                            break
+                
+                if flat_horizon:
+                    # Flat market: skip trading
+                    active_predictions[bar_idx] = {}
+                else:
+                    active_predictions[bar_idx] = model.predict(graph, bar_idx)
             if model.ready_for_update(bar_idx, edge_accels, graph=graph):
                 loss = model.update(
                     graph,
@@ -609,11 +889,9 @@ def run_training(
             if mature_idx in active_predictions:
                 bar_pnl = sum(
                     (capital + total_pnl) * frac * (vel - graph.fee_rate)
-                    if ptt > 0.55
+                    if bid > 0
                     else (capital + total_pnl) * frac * (-vel - graph.fee_rate)
-                    if stop > 0.55
-                    else 0.0
-                    for edge, (frac, ptt, stop) in active_predictions.pop(
+                    for edge, (frac, tpp, bid, sl) in active_predictions.pop(
                         mature_idx
                     ).items()
                     if edge in edge_velocities
@@ -849,18 +1127,44 @@ def _stochastic_bag_sample(
         target = min(target, max_pairs)
     target = min(target, len(filtered_pairs))
     adj = {}
+    quote_counts = {}  # track distinct quote currencies
     for pid in filtered_pairs:
         parts = pid.split("-", 1)
         if len(parts) == 2:
             adj.setdefault(parts[0], []).append(pid)
             adj.setdefault(parts[1], []).append(pid)
+            quote_counts[parts[1]] = quote_counts.get(parts[1], 0) + 1
     if target >= len(filtered_pairs) or not adj:
         return list(filtered_pairs)[:target]
-    selected, visited_currencies, frontier = (
-        set(),
-        {rng.choice(list(adj.keys()))},
-        [rng.choice(list(adj.keys()))],
-    )
+
+    # Phase 1: pick one pair per distinct quote currency first (counter-coin diversity)
+    by_quote = {}
+    for pid in filtered_pairs:
+        parts = pid.split("-", 1)
+        if len(parts) == 2:
+            by_quote.setdefault(parts[1], []).append(pid)
+    selected = set()
+    quotes = list(by_quote.keys())
+    rng.shuffle(quotes)
+    for q in quotes:
+        if len(selected) >= target:
+            break
+        candidates = by_quote[q]
+        rng.shuffle(candidates)
+        picked = False
+        for c in candidates:
+            if c not in selected:
+                selected.add(c)
+                picked = True
+                break
+
+    # Phase 2: BFS fill remaining slots
+    visited_currencies = set()
+    frontier = list(quotes)  # start from all quote currencies
+    for c in visited_currencies:
+        if c in frontier:
+            frontier.remove(c)
+    rng.shuffle(frontier)
     while len(selected) < target and frontier:
         curr = frontier.pop(0)
         candidates = [p for p in adj.get(curr, []) if p not in selected]
@@ -922,22 +1226,18 @@ def _stochastic_span_bars(
 def format_bash_expansion(products: List[str]) -> str:
     """Render the selected bag in the order it was chosen.
 
-    This is intentionally *not* sorted or grouped; stochastic selection should
-    be visible exactly as selected.
+    Compacts into brace expansions in two directions:
+    - Same base, multiple quotes: BTC-{USDT | BUSD}
+    - Same quote, multiple bases: {ADA | ETH | SOL}-USDT
     """
     if not products:
         return "[]"
 
-    # Group by base asset while preserving the order in which bases and
-    # quotes were encountered. We only render brace-style expansions when a
-    # base has multiple quotes or when the quote is a configured prime fiat
-    # (e.g. PBUSD) which the user expects to be emphasized.
     bases_order: List[str] = []
     quotes_for_base: Dict[str, List[str]] = {}
     for p in products:
         s = str(p)
         if "-" not in s:
-            # preserve raw token
             bases_order.append(s)
             quotes_for_base.setdefault(s, [])
             continue
@@ -948,14 +1248,27 @@ def format_bash_expansion(products: List[str]) -> str:
         if quote not in quotes_for_base[base]:
             quotes_for_base[base].append(quote)
 
+    # Collect all unique quotes to detect single-quote-shared case
+    all_quotes: List[str] = []
+    for base in bases_order:
+        for q in quotes_for_base.get(base, []):
+            if q not in all_quotes:
+                all_quotes.append(q)
+
+    # If every base has exactly the same single quote, compact as {bases}-QUOTE
+    if len(all_quotes) == 1 and all(len(quotes_for_base.get(b, [])) == 1 for b in bases_order if quotes_for_base.get(b)):
+        if len(bases_order) == 1:
+            return f"[{bases_order[0]}-{all_quotes[0]}]"
+        inner = " | ".join(bases_order)
+        return f"[{{{inner}}}-{all_quotes[0]}]"
+
     parts: List[str] = []
     for base in bases_order:
         quotes = quotes_for_base.get(base, [])
         if not quotes:
             parts.append(base)
             continue
-        # Render braces if multiple quotes, or if the single quote is a prime fiat
-        if len(quotes) > 1 or any(q in PRIME_FIAT_SET for q in quotes):
+        if len(quotes) > 1:
             inner = " | ".join(quotes)
             parts.append(f"{base}-{{{inner}}}")
         else:
@@ -973,6 +1286,7 @@ def run_autoresearch(
     fixed_dim: Optional[int] = None,
     min_partners: int = 3,
     bag_limit: int = STOCHASTIC_BAG_LIMIT,
+    window_bars_override: int = 0,
 ):
     import cache
 
@@ -1169,7 +1483,7 @@ def run_autoresearch(
     try:
         while True:
             phase += 1
-            window_bars = _stochastic_span_bars(
+            window_bars = window_bars_override if window_bars_override > 0 else _stochastic_span_bars(
                 total_bars,
                 hidden_size,
                 rng,
@@ -1228,19 +1542,27 @@ def run_autoresearch(
                 print(f"Phase {phase}: empty graph, skipping")
                 continue
 
-            lr, y_depth, x_pixels, curvature, prediction_depth = (
-                10 ** random.uniform(-4, -1.5),
-                random.choice(AUTORESEARCH_Y_DEPTH_CHOICES),
+            lr, x_pixels, curvature, prediction_depth = (
+                10 ** random.uniform(-3.3, -1.2),
                 random.choice([10, 15, 20, 30]),
                 random.uniform(0.5, 4.0),
                 random.choice(AUTORESEARCH_PREDICTION_DEPTH_CHOICES),
             )
+            lr2, x_pixels2, curvature2, prediction_depth2 = (
+                10 ** random.uniform(-3.3, -1.2),
+                random.choice([10, 15, 20, 30]),
+                random.uniform(0.5, 4.0),
+                random.choice(AUTORESEARCH_PREDICTION_DEPTH_CHOICES),
+            )
+            # Shared y_depth so both agents compete on equal footing.
+            # Cap to half the window so neither spends the harness in warmup.
+            y_depth = min(random.choice(AUTORESEARCH_Y_DEPTH_CHOICES), window_bars // 2)
             print(
-                f"\n=== Phase {phase} ===\n  Square: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}\n  Bag: {len(selected_pairs)} pairs, {window_bars} bars"
+                f"\n=== Phase {phase} (HARNESS) ===\n  Square: h={hidden_size}, H={H_layers}, L={L_layers}, Hc={H_cycles}, Lc={L_cycles}\n  Bag: {len(selected_pairs)} pairs, {window_bars} bars\n  A0: lr={lr:.2e} xp={x_pixels} pd={prediction_depth}\n  A1: lr={lr2:.2e} xp={x_pixels2} pd={prediction_depth2}\n  Shared yd={y_depth}"
             )
 
-            print("  About to init model", flush=True)
-            model = HierarchicalReasoningModel(
+            print("  About to init agents", flush=True)
+            model_a = HierarchicalReasoningModel(
                 n_edges=len(trial_graph.edges),
                 learning_rate=lr,
                 y_depth=y_depth,
@@ -1255,16 +1577,33 @@ def run_autoresearch(
                 L_cycles=L_cycles,
                 device=device,
             )
+            model_b = HierarchicalReasoningModel(
+                n_edges=len(trial_graph.edges),
+                learning_rate=lr2,
+                y_depth=y_depth,
+                x_pixels=x_pixels2,
+                curvature=curvature2,
+                h_dim=hidden_size,
+                z_dim=hidden_size,
+                prediction_depth=prediction_depth2,
+                H_layers=H_layers,
+                L_layers=L_layers,
+                H_cycles=H_cycles,
+                L_cycles=L_cycles,
+                device=device,
+            )
             print("  About to register edges", flush=True)
-            model.register_edges(_canonical_pair_edges(trial_graph))
+            model_a.register_edges(_canonical_pair_edges(trial_graph))
+            model_b.register_edges(_canonical_pair_edges(trial_graph))
             if checkpoint_path and Path(checkpoint_path).exists() and fixed_dim is None:
-                model.load(checkpoint_path)
+                model_a.load(checkpoint_path)
+                model_b.load(checkpoint_path)
                 hidden_size, H_layers, L_layers, H_cycles, L_cycles = (
-                    model.h_dim,
-                    model.H_layers,
-                    model.L_layers,
-                    model.H_cycles,
-                    model.L_cycles,
+                    model_a.h_dim,
+                    model_a.H_layers,
+                    model_a.L_layers,
+                    model_a.H_cycles,
+                    model_a.L_cycles,
                 )
 
             growth_options = _growable_growth_dims(
@@ -1279,22 +1618,41 @@ def run_autoresearch(
             growth_dim = rng.choice(growth_options) if growth_options else None
 
             print("  About to split", flush=True)
-            split = plan_walk_forward_split(len(trial_graph.common_timestamps), model)
+            split = plan_walk_forward_split(len(trial_graph.common_timestamps), model_a)
             if split is None:
                 print("  Skipping: not enough bars for walk-forward split")
                 continue
             _, train_end_bar, validation_end_bar = split
 
-            loss_history = []
-            total_loss, n_updates, _, loss_history = run_training(
+            # Build sorted bars (shared by both agents)
+            ts_to_bar = {ts: i for i, ts in enumerate(trial_graph.common_timestamps)}
+            bars_with_data = set()
+            for df in trial_graph.edges.values():
+                bars_with_data.update(ts_to_bar[ts] for ts in set(df.index) & ts_to_bar.keys())
+            sorted_bars = sorted(b for b in bars_with_data if 0 <= b < train_end_bar)
+            print(f"Harness: {len(sorted_bars)} bars, 2 agents competing")
+
+            wallet_a = _init_wallet(trial_graph, 100.0)
+            wallet_b = _init_wallet(trial_graph, 100.0)
+
+            harness_results = _run_agent_harness(
                 trial_graph,
-                model,
-                start_bar=0,
-                end_bar=train_end_bar,
-                print_every=100,
-                loss_history=loss_history,
+                [(model_a, wallet_a), (model_b, wallet_b)],
+                sorted_bars,
                 use_profit_loss=(exchange == "binance"),
+                print_every=100,
             )
+            pnl_a, dd_a = harness_results[0]
+            pnl_b, dd_b = harness_results[1]
+            winner = "A0" if pnl_a > pnl_b else "A1" if pnl_b > pnl_a else "TIE"
+            print(f"  HARNESS RESULT: A0 pnl={pnl_a:.2f} dd={dd_a:.2f} | A1 pnl={pnl_b:.2f} dd={dd_b:.2f} | Winner: {winner}")
+
+            # Use the winner for validation and checkpointing — only if profitable
+            best_pnl = max(pnl_a, pnl_b)
+            model = model_a if pnl_a >= pnl_b else model_b
+
+            # Validation on the winner only (training already done in harness)
+            n_updates = 1  # harness did the training
             val_bpb, val_updates = run_walk_forward_validation(
                 trial_graph,
                 model,
@@ -1304,16 +1662,16 @@ def run_autoresearch(
                 use_profit_loss=(exchange == "binance"),
             )
 
-            if n_updates > 0 and checkpoint_path:
+            if n_updates > 0 and checkpoint_path and best_pnl > 0:
                 model.save(
                     checkpoint_path, checkpoint_type=f"autoresearch_phase_{phase}"
                 )
 
             if val_bpb is not None:
                 print(
-                    f"  train_bpb={total_loss / n_updates:.6f} walk_forward_bpb={val_bpb:.6f} (best={best_bpb:.6f})"
+                    f"  walk_forward_bpb={val_bpb:.6f} (best={best_bpb:.6f}) | winner={winner}"
                 )
-                if val_bpb < best_bpb:
+                if val_bpb < best_bpb and best_pnl > 0:
                     best_bpb = val_bpb
                     print(f"  --> [NEW BEST] val_bpb: {best_bpb:.6f}")
                     if checkpoint_path:
@@ -1346,7 +1704,7 @@ def run_autoresearch(
                         ],
                     )
 
-            if growth_dim is not None and _is_converged(loss_history):
+            if growth_dim is not None and best_pnl > 0:
                 old_h, old_H, old_L, old_Hc, old_Lc = (
                     hidden_size,
                     H_layers,
@@ -1442,8 +1800,9 @@ def finetune(
     if model._optimizer:
         for param_group in model._optimizer.param_groups:
             param_group["lr"] = learning_rate
-
-    print("  About to split", flush=True)
+        if hasattr(model, '_scheduler') and model._scheduler:
+            for param_group in model._optimizer.param_groups:
+                model._scheduler.base_lrs = [learning_rate]
     split = plan_walk_forward_split(len(trial_graph.common_timestamps), model)
     if split is None:
         raise ValueError("Not enough bars for walk-forward fine-tuning validation")
@@ -1453,7 +1812,8 @@ def finetune(
     )
 
     total_loss, n_updates, _, _ = run_training(
-        trial_graph, model, start_bar=start_bar, end_bar=train_end_bar, print_every=100
+        trial_graph, model, start_bar=start_bar, end_bar=train_end_bar, print_every=100,
+        use_profit_loss=True,  # FIX: use real wallet pnl, not synthetic approximation
     )
     walk_forward_loss, walk_forward_updates = run_walk_forward_validation(
         trial_graph,
@@ -1627,6 +1987,7 @@ class TrainingWorker:
             start_bar=0,
             end_bar=train_end_bar,
             print_every=1000,
+            use_profit_loss=True,  # FIX: use real wallet pnl, not synthetic approximation
         )
         val_loss, val_updates = run_walk_forward_validation(
             trial_graph,
@@ -1695,6 +2056,9 @@ class TrainingWorker:
         if self.model._optimizer:
             for param_group in self.model._optimizer.param_groups:
                 param_group["lr"] = 0.0001
+            if hasattr(self.model, '_scheduler') and self.model._scheduler:
+                for param_group in self.model._optimizer.param_groups:
+                    self.model._scheduler.base_lrs = [0.0001]
 
         print("  About to split", flush=True)
         split = plan_walk_forward_split(len(trial_graph.common_timestamps), self.model)
@@ -1703,7 +2067,8 @@ class TrainingWorker:
         _, train_end_bar, validation_end_bar = split
 
         total_loss, n_updates, _, _ = run_training(
-            trial_graph, self.model, start_bar=0, end_bar=train_end_bar, print_every=100
+            trial_graph, self.model, start_bar=0, end_bar=train_end_bar, print_every=100,
+            use_profit_loss=True,  # FIX: use real wallet pnl, not synthetic approximation
         )
         val_loss, val_updates = run_walk_forward_validation(
             trial_graph,
@@ -1817,6 +2182,7 @@ def main():
     parser.add_argument("--output", default="model_weights_daytrade.pt")
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--lookback-days", type=int, default=60)
+    parser.add_argument("--bars", type=int, default=0, help="Override window_bars in autoresearch (0 = auto)")
 
     parser.add_argument("--mode", choices=["pretrain", "finetune"], default=None)
     parser.add_argument("--worker-id", default="worker")
@@ -1837,6 +2203,7 @@ def main():
             fixed_dim=args.dim,
             min_partners=args.min_partners,
             bag_limit=args.bag_limit,
+            window_bars_override=args.bars,
         )
     elif args.finetune:
         if not args.pretrained or not args.bag:
