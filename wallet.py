@@ -318,9 +318,9 @@ class SimWallet:
                     )
                 else:
                     # SELL: spent base (ETH/BTC/...), receive quote (USDT)
-                    entry_price = max(1e-30, float(order.price))
+                    # amt is in base units, exit_price is quote/base → proceeds = amt * exit_price
                     fee_mult = math.exp(-max(0.0, float(fee_rate)))
-                    quote_qty = (float(order.amt) * exit_price / entry_price) * fee_mult
+                    quote_qty = float(order.amt) * exit_price * fee_mult
                     quote_bal = self.balance(quote_asset)
                     quote_bal.free += quote_qty
                     settled += 1
