@@ -2181,6 +2181,7 @@ def run_autoresearch(
                 )
                 best_pnl, dd_a = harness_results[0]
                 model = model_a
+                winner = "A0"
                 logger.info("HARNESS RESULT: pnl=%.2f dd=%.2f", best_pnl, dd_a)
             else:
                 # Multi-agent showdown
