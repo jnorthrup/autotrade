@@ -556,35 +556,29 @@ class HierarchicalReasoningModel:
         return combined[:self.x_pixels]
 
     def _get_ohlcv_features(self, edge: Tuple[str, ...], bar_idx: int) -> List[float]:
-        """Extract OHLCV + bar features from kline_view data.
+        """Extract OHLCV + 3-point wallet kernel from kline_view data.
 
-        Returns a fixed-size feature vector for the current bar:
+        Returns a fixed-size feature vector:
         [velocity, range, upper_wick, lower_wick, body, volume, is_live,
-         free_base, free_quote, locked_base, locked_quote]  (11 features)
+         base_free (+), quote_free (-), fiat_prime]  (10 features)
         """
         view = self._kline_view.get(edge)
         is_live = self._kline_live.get(edge, False)
         if not view:
-            return [0.0] * 11
+            return [0.0] * 10
 
         features = []
-        # Bar-level features (current bar, rowIndex=0 in kline_view output)
         features.append(float(view.get("velocity", 0.0)))
         features.append(float(view.get("range", 0.0)))
         features.append(float(view.get("upper_wick", 0.0)))
         features.append(float(view.get("lower_wick", 0.0)))
         features.append(float(view.get("body", 0.0)))
-        # Volume normalized by typical scale
         vol = float(view.get("volume", 0.0))
-        features.append(vol / max(1e-30, abs(vol) + 1.0))  # soft normalization
+        features.append(vol / max(1e-30, abs(vol) + 1.0))
         features.append(1.0 if is_live else 0.0)
-
-        # Wallet state features (if available)
-        features.append(float(view.get("free_base", 0.0)))
-        features.append(float(view.get("free_quote", 0.0)))
-        features.append(float(view.get("locked_base", 0.0)))
-        features.append(float(view.get("locked_quote", 0.0)))
-
+        features.append(float(view.get("wallet/base_free", 0.0)))
+        features.append(float(view.get("wallet/quote_free", 0.0)))
+        features.append(float(view.get("wallet/fiat_prime", 0.0)))
         return features
 
     def _bag_one_hot(self, active_edges: List[Tuple[str, ...]]) -> Tensor:
@@ -711,7 +705,7 @@ class HierarchicalReasoningModel:
         self._record_profile('update_edges', float(len(usable)))
         return float(loss.item())
 
-    def update_prices(self, graph, bar_idx: int) -> List[Tuple[str, str]]:
+    def update_prices(self, graph, bar_idx: int, wallet=None) -> List[Tuple[str, str]]:
         start = time.perf_counter() if self._profile_enabled else None
         if bar_idx < 0 or bar_idx >= len(graph.common_timestamps): self._last_price_bar_idx = None; self._observed_edges_for_bar = []; return []
         # Pandas-only: store graph reference for all reads
@@ -728,7 +722,7 @@ class HierarchicalReasoningModel:
             try:
                 from kline_view import decorate_view, is_live_bar
                 for edge in observed_edges:
-                    self._kline_view[edge] = decorate_view(graph, edge, bar_idx, horizon_width=self.x_pixels)
+                    self._kline_view[edge] = decorate_view(graph, edge, bar_idx, horizon_width=self.x_pixels, wallet=wallet)
                     self._kline_live[edge] = is_live_bar(graph, edge, bar_idx)
             except ImportError:
                 pass

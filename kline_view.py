@@ -230,15 +230,19 @@ def decorate_view(
     # 3. Live bar indicator
     result["is_live"] = 1.0 if is_live_bar(graph, edge, bar_idx) else 0.0
 
-    # 4. Wallet state (walletFree equivalent from MuxIo.assembleRow)
+    # 4. Wallet state — 3 inference points per edge
+    #    +base_free, -quote_free (negated), fiat_prime (base_free × close)
     if wallet is not None:
         _, base_asset, quote_asset = _parse_edge(edge)
         base_bal = wallet.balance(base_asset)
         quote_bal = wallet.balance(quote_asset)
         result["wallet/base_free"] = base_bal.free
-        result["wallet/quote_free"] = quote_bal.free
-        result["wallet/base_locked"] = base_bal.sim_locked
-        result["wallet/quote_locked"] = quote_bal.sim_locked
+        result["wallet/quote_free"] = -quote_bal.free
+        result["wallet/fiat_prime"] = base_bal.free * result.get("close_0", 0.0)
+    else:
+        result["wallet/base_free"] = 0.0
+        result["wallet/quote_free"] = 0.0
+        result["wallet/fiat_prime"] = 0.0
 
     # 5. Time features (DateShed normalizeInstant equivalent)
     from model import time_cyclical_features

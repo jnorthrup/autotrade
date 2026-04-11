@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 # --- Constants & Helpers ---
 SQUARE_CUBE_SIZES = [4, 16, 64, 256]
-STOCHASTIC_SPAN_LIMIT = 50
+STOCHASTIC_SPAN_LIMIT = 2400
 STOCHASTIC_BAG_LIMIT = 50
 STOCHASTIC_BAG_PER_WIDTH = 5
 AUTORESEARCH_Y_DEPTH_CHOICES = (100, 200, 300, 400)
@@ -969,6 +969,7 @@ def _run_agent_harness(
     use_profit_loss: bool = False,
     print_every: int = 100,
     capital: float = 100.0,
+    flat_bars: int = 100,
 ) -> List[Tuple[float, float]]:
     """Run N agents head-to-head on same bars. Returns list of (total_pnl, max_drawdown) per agent."""
     n_agents = len(agents)
@@ -1003,7 +1004,7 @@ def _run_agent_harness(
             if s["dead"]:
                 continue
             model, wallet = s["model"], s["wallet"]
-            model.update_prices(graph, bar_idx)
+            model.update_prices(graph, bar_idx, wallet)
 
             if use_profit_loss:
                 settlement = wallet.settle_due_orders(
@@ -1089,7 +1090,7 @@ def _run_agent_harness(
                     s["total_loss"] += train_loss
                     s["n_updates"] += 1
                     s["last_update_bar"] = i
-                # Hard exit: wallet worth <= capital for 100 consecutive bars
+                # Hard exit: wallet worth <= capital for flat_bars consecutive bars
                 # Only count after model warmup — can't blame the model before it can trade
                 if i >= model.y_depth:
                     worth = wallet.worth(graph, bar_idx)
@@ -1097,7 +1098,7 @@ def _run_agent_harness(
                         s["flat_bars"] += 1
                     else:
                         s["flat_bars"] = 0
-                    if s["flat_bars"] >= 100:
+                    if flat_bars > 0 and s["flat_bars"] >= flat_bars:
                         s["dead"] = True
             else:
                 if model.ready_for_prediction(bar_idx):
@@ -1142,14 +1143,14 @@ def _run_agent_harness(
                     s["total_pnl"] += bar_pnl
                     s["max_pnl"] = max(s["max_pnl"], s["total_pnl"])
                     s["max_drawdown"] = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"])
-                # Hard exit in non-profit path: balance at or below capital for 100 bars
+                # Hard exit in non-profit path: balance at or below capital for flat_bars bars
                 if i >= model.y_depth:
                     sim_balance = capital + s["total_pnl"]
                     if sim_balance <= capital:
                         s["flat_bars"] += 1
                     else:
                         s["flat_bars"] = 0
-                    if s["flat_bars"] >= 100:
+                    if flat_bars > 0 and s["flat_bars"] >= flat_bars:
                         s["dead"] = True
 
         # Bail: all agents dead — print final balances before bailing
@@ -1788,6 +1789,8 @@ def run_autoresearch(
     min_partners: int = 3,
     bag_limit: int = STOCHASTIC_BAG_LIMIT,
     window_bars_override: int = 0,
+    flat_bars: int = 100,
+    num_agents: int = 1,
     # CMC params (TODO 10)
     cmc_min_rank: Optional[int] = None,
     cmc_min_volume_24h: Optional[float] = None,
@@ -2157,32 +2160,53 @@ def run_autoresearch(
                 continue
             _, train_end_bar, validation_end_bar = split
 
-            # Build sorted bars (shared by both agents)
+            # Build sorted bars
             ts_to_bar = {ts: i for i, ts in enumerate(trial_graph.common_timestamps)}
             bars_with_data = set()
             for df in trial_graph.edges.values():
                 bars_with_data.update(ts_to_bar[ts] for ts in set(df.index) & ts_to_bar.keys())
             sorted_bars = sorted(b for b in bars_with_data if 0 <= b < train_end_bar)
-            logger.info("Harness: %d bars, 2 agents competing", len(sorted_bars))
 
-            wallet_a = _init_wallet(trial_graph, 100.0)
-            wallet_b = _init_wallet(trial_graph, 100.0)
+            if num_agents <= 1:
+                # Single-agent harness — no competition overhead
+                logger.info("Harness: %d bars, single agent", len(sorted_bars))
+                wallet_a = _init_wallet(trial_graph, 100.0)
+                harness_results = _run_agent_harness(
+                    trial_graph,
+                    [(model_a, wallet_a)],
+                    sorted_bars,
+                    use_profit_loss=(exchange == "binance"),
+                    print_every=100,
+                    flat_bars=flat_bars,
+                )
+                best_pnl, dd_a = harness_results[0]
+                model = model_a
+                logger.info("HARNESS RESULT: pnl=%.2f dd=%.2f", best_pnl, dd_a)
+            else:
+                # Multi-agent showdown
+                logger.info("Harness: %d bars, %d agents competing", len(sorted_bars), num_agents)
+                agent_tuples = []
+                for mi in range(num_agents):
+                    m = HRMEdgePredictor(
+                        hidden_size=hidden_size, H_layers=H_layers, L_layers=L_layers,
+                        H_cycles=H_cycles, L_cycles=L_cycles,
+                    ) if mi >= 2 else (model_a if mi == 0 else model_b)
+                    m.register_edges(_canonical_pair_edges(trial_graph))
+                    agent_tuples.append((m, _init_wallet(trial_graph, 100.0)))
 
-            harness_results = _run_agent_harness(
-                trial_graph,
-                [(model_a, wallet_a), (model_b, wallet_b)],
-                sorted_bars,
-                use_profit_loss=(exchange == "binance"),
-                print_every=100,
-            )
-            pnl_a, dd_a = harness_results[0]
-            pnl_b, dd_b = harness_results[1]
-            winner = "A0" if pnl_a > pnl_b else "A1" if pnl_b > pnl_a else "TIE"
-            logger.info("HARNESS RESULT: A0 pnl=%.2f dd=%.2f | A1 pnl=%.2f dd=%.2f | Winner: %s", pnl_a, dd_a, pnl_b, dd_b, winner)
-
-            # Use the winner for validation and checkpointing — only if profitable
-            best_pnl = max(pnl_a, pnl_b)
-            model = model_a if pnl_a >= pnl_b else model_b
+                harness_results = _run_agent_harness(
+                    trial_graph,
+                    agent_tuples,
+                    sorted_bars,
+                    use_profit_loss=(exchange == "binance"),
+                    print_every=100,
+                    flat_bars=flat_bars,
+                )
+                best_idx = max(range(len(harness_results)), key=lambda i: harness_results[i][0])
+                best_pnl, _ = harness_results[best_idx]
+                model = agent_tuples[best_idx][0]
+                parts = " | ".join(f"A{i}: pnl={p:.2f} dd={d:.2f}" for i, (p, d) in enumerate(harness_results))
+                logger.info("HARNESS RESULT: %s | Winner: A%d", parts, best_idx)
 
             # Validation on the winner only (training already done in harness)
             n_updates = 1  # harness did the training
@@ -2726,6 +2750,8 @@ def main():
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--bars", type=int, default=0, help="Override window_bars in autoresearch (0 = auto)")
+    parser.add_argument("--flat-bars", type=int, default=100, help="Bars below capital before agent is declared dead (0=disabled)")
+    parser.add_argument("--num-agents", type=int, default=1, help="Number of agents in harness (1=single, 2+=showdown)")
 
     # CMC Integration (TODO 7)
     cmc_group = parser.add_argument_group("cmc")
@@ -2795,6 +2821,8 @@ def main():
             min_partners=args.min_partners,
             bag_limit=args.bag_limit,
             window_bars_override=args.bars,
+            flat_bars=args.flat_bars,
+            num_agents=args.num_agents,
             cmc_min_rank=args.cmc_min_rank,
             cmc_min_volume_24h=args.cmc_min_volume_24h,
             cmc_min_mcap=args.cmc_min_mcap,
