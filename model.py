@@ -38,6 +38,66 @@ def get_device(preferred: str = "auto") -> torch.device:
 
 def _find_multiple(a, b): return (-(a // -b)) * b
 
+class _MuonOptimizer(torch.optim.Optimizer):
+    """Muon: AdamW-like optimizer with Newton-Schulz gradient preconditioning for 2D+ params."""
+    def __init__(self, params, lr=1e-3, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=0.01, ns_steps=5):
+        defaults = dict(lr=lr, beta1=beta1, beta2=beta2, eps=eps, weight_decay=weight_decay, ns_steps=ns_steps)
+        super().__init__(params, defaults)
+        for pg in self.param_groups:
+            for p in pg['params']:
+                self.state[p] = {'step': 0, 'exp_avg': torch.zeros_like(p), 'exp_avg_sq': torch.zeros_like(p)}
+
+    def zero_grad(self, set_to_none=True):
+        for pg in self.param_groups:
+            for p in pg['params']:
+                if p.grad is not None:
+                    if set_to_none: p.grad = None
+                    else: p.grad.zero_()
+
+    @torch.no_grad()
+    def step(self):
+        for pg in self.param_groups:
+            lr = pg['lr']
+            beta1 = pg['beta1']
+            beta2 = pg['beta2']
+            eps = pg['eps']
+            wd = pg['weight_decay']
+            ns = pg['ns_steps']
+            for p in pg['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                state['step'] += 1
+                if wd != 0:
+                    p.mul_(1 - lr * wd)
+                state['exp_avg'].lerp_(grad, 1 - beta1)
+                state['exp_avg_sq'].lerp_(grad.square(), 1 - beta2)
+                bias1 = 1 - beta1 ** state['step']
+                bias2 = 1 - beta2 ** state['step']
+                m = state['exp_avg'] / bias1
+                v = state['exp_avg_sq'] / bias2
+                if p.dim() >= 2:
+                    a, b = _ns(m, ns)
+                    p.add_(a * b, alpha=-lr)
+                else:
+                    p.add_(m / (v.sqrt() + eps), alpha=-lr)
+
+def _ns(G, steps):
+    """Newton-Schulz on momentum: reshape to 2D, orthogonalize, reshape back. Returns (ortho, scale)."""
+    orig_shape = G.shape
+    if G.dim() == 1:
+        return G, 1.0
+    if G.dim() > 2:
+        G = G.view(G.shape[0], -1)
+    sigma = max(torch.linalg.matrix_norm(G, ord='fro'), 1e-12)
+    X = G / sigma
+    for _ in range(steps):
+        A = X @ X.T
+        B = X.T @ X
+        X = 1.5 * X - 0.5 * A @ X - 0.5 * X @ B
+    return X.view(orig_shape), sigma
+
 def rotate_half(x: torch.Tensor):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]

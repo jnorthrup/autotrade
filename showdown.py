@@ -1031,11 +1031,9 @@ def _run_agent_harness(
                                 break
                     
                     if not can_profit:
-                        # Not enough volatility to overcome fees
                         preds = {}
                     else:
                         preds = model.predict(graph, bar_idx)
-                    
                     wallet.reserve_orders(
                         _orders_from_predictions(
                             wallet, graph, preds,
@@ -1045,23 +1043,24 @@ def _run_agent_harness(
                         graph=graph, bar_idx=bar_idx,
                     )
                 train_loss = None
+                # Stagnation: crank the actual learning rate, not the loss.
+                # Scaling loss is pointless — grad clipping normalizes it back.
+                pnl_hist = s["pnl_history"]
+                stagnation_window = 20
+                multiplier = 1.0
+                if len(pnl_hist) >= stagnation_window:
+                    window = pnl_hist[-stagnation_window:]
+                    window_sum = sum(abs(x) for x in window)
+                    if window_sum < 1e-6:
+                        multiplier = 5.0
+                    else:
+                        window_range = max(window) - min(window)
+                        if window_range < capital * 0.001:
+                            stagnation_ratio = 1.0 - min(1.0, window_range / (capital * 0.001))
+                            multiplier = 1.0 + 4.0 * stagnation_ratio
+                s["stagnation_mult"] = multiplier
+                model.set_lr_multiplier(multiplier)
                 if model.ready_for_update(bar_idx, edge_accels, graph=graph):
-                    # Stagnation: crank the actual learning rate, not the loss.
-                    # Scaling loss is pointless — grad clipping normalizes it back.
-                    pnl_hist = s["pnl_history"]
-                    stagnation_window = 20
-                    multiplier = 1.0
-                    if len(pnl_hist) >= stagnation_window:
-                        window = pnl_hist[-stagnation_window:]
-                        window_sum = sum(abs(x) for x in window)
-                        if window_sum < 1e-6:
-                            multiplier = 10.0
-                        else:
-                            window_range = max(window) - min(window)
-                            if window_range < capital * 0.001:
-                                stagnation_ratio = 1.0 - min(1.0, window_range / (capital * 0.001))
-                                multiplier = 1.0 + 9.0 * stagnation_ratio
-                    model.set_lr_multiplier(multiplier)
                     train_loss = model.update(
                         graph, edge_accels, bar_idx,
                         actual_velocities=edge_velocities,
@@ -1099,7 +1098,11 @@ def _run_agent_harness(
                     else:
                         s["flat_bars"] = 0
                     if flat_bars > 0 and s["flat_bars"] >= flat_bars:
-                        s["dead"] = True
+                        t = model.force_update(graph, edge_accels, bar_idx, actual_velocities=edge_velocities, hit_ptt=hit_ptt, hit_stop=hit_stop);
+                        if t is None: s["dead"] = True;
+                        else:
+                            for _pg in model._optimizer.param_groups: _pg['lr'] *= 5
+                            model._carry = {e: None for e in model._carry}; s["flat_bars"] = 0
             else:
                 if model.ready_for_prediction(bar_idx):
                     # BAIL: check if fisheye horizon is flat (no price movement)
@@ -1151,10 +1154,11 @@ def _run_agent_harness(
                     else:
                         s["flat_bars"] = 0
                     if flat_bars > 0 and s["flat_bars"] >= flat_bars:
-                        s["dead"] = True
-
-        # Bail: all agents dead — print final balances before bailing
-        if all(s["dead"] for s in states):
+                        t = model.force_update(graph, edge_accels, bar_idx, actual_velocities=edge_velocities, hit_ptt=hit_ptt, hit_stop=hit_stop);
+                        if t is None: s["dead"] = True;
+                        else:
+                            for _pg in model._optimizer.param_groups: _pg['lr'] *= 5
+                            model._carry = {e: None for e in model._carry}; s["flat_bars"] = 0
             parts = []
             for ai, s in enumerate(states):
                 bal = s["wallet"].worth(graph, bar_idx) if use_profit_loss else capital + s["total_pnl"]
@@ -1192,9 +1196,6 @@ def _run_agent_harness(
                 logger.debug("  %s: mean=%.8f, std=%.8f, var=%.8f, range=%.8f-%.8f (%.4f%%)",
                     key, mean_price, std_price, var_price, min_price, max_price, range_pct)
 
-            logger.warning("Harness[%d/%d] Bar %d | %s — ALL DEAD", i+1, len(sorted_bars), bar_idx, " | ".join(parts))
-            break
-
         if (i % print_every == 0 and i > 0) or (i == len(sorted_bars) - 1):
             # Track pnl from 100 bars ago for incremental profit indicator
             # Store current pnl before updating pnl_100_ago for comparison
@@ -1204,13 +1205,13 @@ def _run_agent_harness(
             
             parts = []
             for ai, s in enumerate(states):
-                if s["dead"]:
-                    parts.append(f"A{ai}: DEAD(flat={s['flat_bars']})")
-                elif s["n_updates"] > 0:
+                if s["n_updates"] > 0:
                     bal = s["wallet"].worth(graph, bar_idx) if use_profit_loss else capital + s["total_pnl"]
                     dd = max(s["max_drawdown"], s["max_pnl"] - s["total_pnl"]) if use_profit_loss else s["max_drawdown"]
                     emoji = " 📈" if s["total_pnl"] > s["pnl_100_ago"] else ""
-                    parts.append(f"A{ai}: pnl={s['total_pnl']:.2f} bal={bal:.2f} dd={dd:.2f}{emoji}")
+                    stag = s.get("stagnation_mult", 1.0)
+                    stag_emoji = f" 💤x{stag:.0f}" if stag > 1.5 else ""
+                    parts.append(f"A{ai}: pnl={s['total_pnl']:.2f} bal={bal:.2f} dd={dd:.2f}{stag_emoji}{emoji}")
                     # DEBUG: show wallet state summary
                     if use_profit_loss:
                         free = s["wallet"].free_qty_map()
