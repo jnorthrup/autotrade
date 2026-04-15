@@ -1,0 +1,18 @@
+acceptance:
+- Main class bootstraps AppConfig, ExchangeService, PaperTradingEngine, and TradingStrategy
+- ScheduledExecutorService runs the trading loop at poll-interval-seconds
+- 'Each tick: fetch prices, evaluate strategy, execute resulting signals, log trades'
+- Console output shows timestamped actions and portfolio summary every cycle
+- SIGINT / graceful shutdown persists final state and logs shutdown message
+- App runs via mvn exec:java -Dexec.mainClass=com.xtrade.Main for at least 10 cycles
+  without error
+dependencies:
+- '004'
+- '005'
+description: 'Wire everything into a main application loop: a scheduled executor polls
+  market data at the configured interval, feeds it to the strategy, routes signals
+  to the paper trading engine, logs every action, and prints a portfolio summary.
+  Add graceful shutdown (persist state, close exchange). The app should be runnable
+  via mvn exec:java or java -jar.'
+id: '006'
+name: Scheduler, Main Loop, and Application Wiring

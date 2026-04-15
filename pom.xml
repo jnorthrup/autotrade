@@ -20,7 +20,7 @@
 
     <!--    this module must be removed as a parent to any project below and renormalize them to work-->
     <modules>
-        <module>columnar</module>
+<!--        <module>columnar</module>module-->
         <module>binance</module>
         <module>mp</module>
     </modules>

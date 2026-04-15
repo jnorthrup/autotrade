@@ -1,0 +1,18 @@
+acceptance:
+- ' AppConfig class reads KRAKEN_API_KEY, KRAKEN_API_SECRET, KRAKEN_MODE from env
+  with clear error messages if missing'
+- 'TradingPair enum or constant list defines 5 pairs: BTC/USD, ETH/USD, XRP/USD, SOL/USD,
+  ADA/USD'
+- application.properties contains poll-interval-seconds and initial-virtual-balance
+  defaults
+- Unit tests verify config loading with mocked environment variables
+dependencies:
+- '001'
+description: Build a configuration layer that reads KRAKEN_API_KEY and KRAKEN_API_SECRET
+  (and optional KRAKEN_MODE=sandbox|live) from environment variables, validates they
+  are present, and exposes them as an immutable config object. Also define the 5 major
+  trading pairs (BTC/USD, ETH/USD, XRP/USD, SOL/USD, ADA/USD) as an enum or constant
+  list. Add application.properties for tuneable params like poll-interval-seconds
+  and initial-virtual-balance.
+id: '002'
+name: Configuration Module with Kraken Environment Variables
