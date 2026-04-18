@@ -22,7 +22,7 @@
     <modules>
 <!--        <module>columnar</module>module-->
         <module>binance</module>
-        <module>mp</module>
+        <module>xtrade</module>
     </modules>
 
     <dependencyManagement>
@@ -67,7 +67,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version> 4.0.0-beta-2</version>
+                    <version>3.11.0</version>
                 </plugin>
             </plugins>
         </pluginManagement>

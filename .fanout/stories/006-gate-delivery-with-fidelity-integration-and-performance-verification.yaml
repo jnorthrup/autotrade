@@ -1,0 +1,14 @@
+acceptance:
+- "End-to-end tests verify exact or policy-defined-equal roundtrips across JS\u2194\
+  WASM\u2194JSON boundaries with no silent precision loss"
+- Integration tests prove the Dreamer pipeline uses the WASM path under normal operation
+  and falls back correctly under fault or capability checks
+- Benchmark and regression gates confirm the promoted path meets agreed latency/throughput
+  goals and maintains portability across target engines
+dependencies:
+- '005'
+description: Establish final release criteria proving that the integrated path preserves
+  64-bit fidelity, keeps contact math inside the double-vector kernel, and delivers
+  the intended SIMD-oriented speedup without regressions across supported runtimes.
+id: '006'
+name: Gate delivery with fidelity, integration, and performance verification

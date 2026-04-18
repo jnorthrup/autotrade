@@ -1,5 +1,7 @@
 package com.xtrade;
 
+import com.xtrade.showdown.ShowdownCli;
+import com.xtrade.showdown.ShowdownHarness;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,6 +70,14 @@ public class Main {
     // ------------------------------------------------------------------ //
 
     public static void main(String[] args) {
+        // Parse CLI for showdown mode first
+        ShowdownCli cli = ShowdownCli.parse(args);
+
+        if (cli.isShowdown()) {
+            runShowdown(cli);
+            return;
+        }
+
         printBanner();
 
         Main app = null;
@@ -80,6 +90,85 @@ public class Main {
         }
 
         app.run();
+    }
+
+    /**
+     * Runs the multi-agent showdown mode.
+     * Instantiates ShowdownHarness with the configured codec IDs,
+     * data source, and tick count, then prints the leaderboard.
+     */
+    static void runShowdown(ShowdownCli cli) {
+        System.out.println("========================================");
+        System.out.println("   XT RADE  SHOWDOWN  MODE");
+        System.out.println("========================================");
+        System.out.printf("Codecs: %d agents | Ticks: %d | Source: %s | Output: %s%n",
+                cli.getCodecIds().size(), cli.getTicks(), cli.getDataSourceKind(),
+                cli.getOutputMode());
+        if (cli.isDashboardEnabled()) {
+            System.out.println("Dashboard: ENABLED");
+        }
+
+        ShowdownHarness harness = buildShowdownHarness(cli);
+
+        // Apply output mode and dashboard settings
+        ShowdownHarness.OutputMode harnessOutputMode =
+                cli.getOutputMode() == ShowdownCli.OutputMode.JSON
+                        ? ShowdownHarness.OutputMode.JSON
+                        : ShowdownHarness.OutputMode.TEXT;
+        harness.setOutputMode(harnessOutputMode, cli.getJsonOutputPath());
+        harness.setDashboardEnabled(cli.isDashboardEnabled());
+
+        System.out.println("Running showdown...");
+        long startTime = System.currentTimeMillis();
+        harness.run();
+        long elapsed = System.currentTimeMillis() - startTime;
+
+        // Leaderboard is printed inside harness.run() for TEXT mode,
+        // JSON is written inside harness.run() for JSON mode.
+        // Only print summary stats here if not already printed.
+        if (cli.getOutputMode() == ShowdownCli.OutputMode.TEXT) {
+            System.out.printf("Showdown completed in %d ms (%d ticks)%n", elapsed, harness.getTickCount());
+        } else {
+            System.out.printf("Showdown completed in %d ms (%d ticks)%n", elapsed, harness.getTickCount());
+        }
+    }
+
+    /**
+     * Constructs a ShowdownHarness from the parsed CLI configuration.
+     */
+    static ShowdownHarness buildShowdownHarness(ShowdownCli cli) {
+        switch (cli.getDataSourceKind()) {
+            case REPLAY:
+                return new ShowdownHarness(
+                        cli.getCodecIds(),
+                        new com.xtrade.showdown.ReplayDataSource(cli.getReplayFile(), cli.getTicks()),
+                        100_000.0,
+                        java.util.Collections.singletonList("BTC/USDT"),
+                        cli.getTicks()
+                );
+            case LIVE:
+                // Attempt live; fall back to simulated if exchange is unavailable
+                try {
+                    AppConfig config = AppConfig.fromEnv();
+                    ExchangeService svc = new ExchangeService(config);
+                    return new ShowdownHarness(
+                            cli.getCodecIds(),
+                            new com.xtrade.showdown.RealtimeDataSource(
+                                    java.util.Collections.singletonList("BTC/USD"),
+                                    svc, cli.getTicks(), 1000L),
+                            100_000.0,
+                            java.util.Collections.singletonList("BTC/USD"),
+                            cli.getTicks()
+                    );
+                } catch (Exception e) {
+                    LOG.warn("Live data source unavailable, falling back to simulated: {}", e.getMessage());
+                    System.out.println("[WARN] Live data unavailable, using simulated data source");
+                    return new ShowdownHarness(cli.getCodecIds(), cli.getTicks());
+                }
+            case SIMULATED:
+            default:
+                return new ShowdownHarness(cli.getCodecIds(), cli.getTicks());
+        }
     }
 
     // ------------------------------------------------------------------ //

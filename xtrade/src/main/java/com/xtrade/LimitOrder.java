@@ -23,13 +23,23 @@ public class LimitOrder {
     private volatile Status status;
 
     public LimitOrder(String pair, TradeRecord.Side side, BigDecimal limitPrice, BigDecimal quantity) {
-        this.orderId = UUID.randomUUID().toString();
-        this.createdAt = Instant.now();
+        this(UUID.randomUUID().toString(), Instant.now(), pair, side, limitPrice, quantity, Status.OPEN);
+    }
+
+    public LimitOrder(String orderId,
+                      Instant createdAt,
+                      String pair,
+                      TradeRecord.Side side,
+                      BigDecimal limitPrice,
+                      BigDecimal quantity,
+                      Status status) {
+        this.orderId = orderId;
+        this.createdAt = createdAt;
         this.pair = pair;
         this.side = side;
         this.limitPrice = limitPrice;
         this.quantity = quantity;
-        this.status = Status.OPEN;
+        this.status = status;
     }
 
     public String getOrderId() { return orderId; }

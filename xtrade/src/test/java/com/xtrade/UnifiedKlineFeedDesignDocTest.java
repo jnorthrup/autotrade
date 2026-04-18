@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class UnifiedKlineFeedDesignDocTest {
 
     @Test
-    void designDocumentExistsAndCoversSpiAndCachingSemantics() throws IOException {
+    void designDocumentCoversSpiCachingAndOperationalMonitoring() throws IOException {
         Path doc = Path.of("docs", "unified-kline-feed-design.md");
         assertTrue(Files.exists(doc), "design document should exist at docs/unified-kline-feed-design.md");
 
@@ -39,6 +39,12 @@ public class UnifiedKlineFeedDesignDocTest {
                 "requestbars",
                 "subscribe",
                 "papertradingengineklineadapter",
+                "operational monitoring design",
+                "cache hit rate",
+                "feed latency",
+                "producer connectivity",
+                "stale-feed alerts",
+                "klinefeedmonitorserver",
                 "review checklist",
                 "reviewed"
         };

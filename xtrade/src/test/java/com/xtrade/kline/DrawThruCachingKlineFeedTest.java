@@ -3,7 +3,18 @@ package com.xtrade.kline;
 import com.xtrade.PaperTradingEngine;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -14,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -75,6 +87,75 @@ class DrawThruCachingKlineFeedTest {
         assertEquals(2, first.size());
         assertEquals(2, second.size());
         assertEquals(new BigDecimal("105"), second.get(1).closePrice());
+    }
+
+    @Test
+    void healthAndMetricsExposeCacheHitRateLatencyAndProducerConnectivity() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-04-17T09:25:00Z"));
+        DrawThruCachingKlineFeed feed = new DrawThruCachingKlineFeed(32, clock);
+        KlineProducerHandle producer = feed.registerProducer(new KlineProducerRegistration(
+                "binance-live",
+                "binance websocket",
+                Collections.singleton(BTC_1M),
+                request -> Collections.singletonList(bar(BTC_1M, 0L, "100", "101", "99", "100.5", true, 1L, 15L, Collections.singletonMap("exchangeSymbol", "BTCUSDT")))));
+
+        feed.requestBars(KlineBatchRequest.latest(BTC_1M, 1));
+        feed.requestBars(KlineBatchRequest.latest(BTC_1M, 1));
+        producer.publish(bar(BTC_1M, 60_000L, "100.5", "102", "100", "101.75", true, 2L, 25L, Collections.singletonMap("exchangeSymbol", "BTCUSDT")));
+
+        KlineFeedHealthReport health = feed.healthReport(Duration.ofSeconds(90));
+        assertEquals("OK", health.status());
+        assertTrue(health.healthy());
+        assertEquals(2L, health.metrics().cacheRequests());
+        assertEquals(1L, health.metrics().cacheHits());
+        assertEquals(1L, health.metrics().cacheMisses());
+        assertEquals(0.5d, health.metrics().cacheHitRate(), 1e-9d);
+        assertEquals(2L, health.metrics().publishedBars());
+        assertEquals(25L, health.metrics().maxFeedLatencyMillis());
+        assertEquals(25L, health.metrics().lastFeedLatencyMillis());
+        assertEquals(20.0d, health.metrics().averageFeedLatencyMillis(), 1e-9d);
+        assertEquals(1, health.metrics().producers().size());
+        assertTrue(health.metrics().producers().get(0).connected());
+        assertFalse(health.metrics().producers().get(0).stale());
+
+        String metrics = feed.prometheusMetrics(Duration.ofSeconds(90));
+        assertTrue(metrics.contains("xtrade_kline_cache_hit_rate 0.5"));
+        assertTrue(metrics.contains("xtrade_kline_feed_latency_millis_avg 20.0"));
+        assertTrue(metrics.contains("xtrade_kline_producer_connected{producer_id=\"binance-live\""));
+
+        clock.advanceMillis(Duration.ofMinutes(5).toMillis());
+        KlineFeedHealthReport staleHealth = feed.healthReport(Duration.ofSeconds(90));
+        assertEquals("CRITICAL", staleHealth.status());
+        assertFalse(staleHealth.alerts().isEmpty());
+        assertTrue(staleHealth.alerts().get(0).contains("stale"));
+    }
+
+    @Test
+    void monitorServerPublishesHealthEndpointAndPrometheusMetrics() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-04-17T09:25:00Z"));
+        DrawThruCachingKlineFeed feed = new DrawThruCachingKlineFeed(32, clock);
+        KlineProducerHandle producer = feed.registerProducer(new KlineProducerRegistration(
+                "binance-live",
+                "binance websocket",
+                Collections.singleton(BTC_1M),
+                null));
+        producer.publish(bar(BTC_1M, 0L, "100", "101", "99", "100.5", true, 1L, 10L, Collections.singletonMap("exchangeSymbol", "BTCUSDT")));
+
+        try (KlineFeedMonitorServer server = KlineFeedMonitorServer.start(feed, new InetSocketAddress("127.0.0.1", 0), Duration.ofSeconds(90))) {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest healthRequest = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/health")).GET().build();
+            HttpRequest metricsRequest = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/metrics")).GET().build();
+
+            HttpResponse<String> healthResponse = client.send(healthRequest, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> metricsResponse = client.send(metricsRequest, HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, healthResponse.statusCode());
+            assertEquals(200, metricsResponse.statusCode());
+            assertTrue(healthResponse.body().contains("\"status\": \"OK\""));
+            assertTrue(healthResponse.body().contains("\"cacheHitRate\": 1.0"));
+            assertTrue(metricsResponse.body().contains("xtrade_kline_cache_hit_rate 1.0"));
+            assertTrue(metricsResponse.body().contains("xtrade_kline_producer_connected{producer_id=\"binance-live\""));
+        }
     }
 
     @Test
@@ -184,12 +265,27 @@ class DrawThruCachingKlineFeedTest {
                                 boolean closed,
                                 long sequence,
                                 Map<String, String> metadata) {
+        return bar(seriesId, openTimeMillis, open, high, low, close, closed, sequence,
+                seriesId.interval().toMillis() - 1L, metadata);
+    }
+
+    private static KlineBar bar(KlineSeriesId seriesId,
+                                long openTimeMillis,
+                                String open,
+                                String high,
+                                String low,
+                                String close,
+                                boolean closed,
+                                long sequence,
+                                long latencyMillis,
+                                Map<String, String> metadata) {
+        long eventTimeMillis = openTimeMillis + seriesId.interval().toMillis() - 1L;
         return new KlineBar(
                 seriesId,
                 openTimeMillis,
                 openTimeMillis + seriesId.interval().toMillis(),
-                openTimeMillis + seriesId.interval().toMillis() - 1L,
-                openTimeMillis + seriesId.interval().toMillis() - 1L,
+                eventTimeMillis,
+                eventTimeMillis + latencyMillis,
                 new BigDecimal(open),
                 new BigDecimal(high),
                 new BigDecimal(low),
@@ -224,6 +320,33 @@ class DrawThruCachingKlineFeedTest {
         @Override
         public void onClosed(KlineSeriesId seriesId) {
             closed = true;
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
+
+        private void advanceMillis(long millis) {
+            instant = instant.plusMillis(millis);
         }
     }
 }

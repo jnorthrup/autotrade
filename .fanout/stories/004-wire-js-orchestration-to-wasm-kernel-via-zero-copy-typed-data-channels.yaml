@@ -1,0 +1,20 @@
+acceptance:
+- Zero-copy data transfer verified via SharedArrayBuffer or transferable buffer in
+  runtime
+- End-to-end latency from tick ingestion to indicator output within defined SLA threshold
+- 'Worker lifecycle is stable: clean init, hot reload, and graceful shutdown without
+  memory leaks'
+- Graceful fallback path when WASM SIMD is not available (falls back to JS TypedArray
+  kernel)
+- No numeric computation remains in the JS orchestration hot path
+dependencies:
+- '002'
+- '003'
+description: "Implement the JS orchestration layer that collects indicator inputs\
+  \ from the dreamer process, buffers them into preallocated Float64Array SoA layout,\
+  \ transfers data to the WASM module via SharedArrayBuffer or transferable ArrayBuffers,\
+  \ and retrieves computed results with zero-copy mapping. Keep dreamer as orchestration\
+  \ only \u2014 no numeric hot paths in JS. Implement stable worker lifecycle management\
+  \ and graceful fallback if WASM SIMD is unavailable."
+id: '004'
+name: Wire JS orchestration to WASM kernel via zero-copy typed-data channels

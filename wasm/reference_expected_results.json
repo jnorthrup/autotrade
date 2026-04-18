@@ -1,0 +1,387 @@
+{
+  "version": "1.0.0",
+  "precision": "binary64",
+  "description": "Deterministic reference expected results for Dreamer WASM kernel verification",
+  "generated": "2025-04-17T18:55:00Z",
+  
+  "metadata": {
+    "ieee754": {
+      "positive_zero": {"value": 0.0, "hex": "0000000000000000"},
+      "negative_zero": {"value": -0.0, "hex": "8000000000000000"},
+      "positive_infinity": {"value": "Infinity", "hex": "7ff0000000000000"},
+      "negative_infinity": {"value": "-Infinity", "hex": "fff0000000000000"},
+      "quiet_nan": {"value": "NaN", "hex": "7ff8000000000000"},
+      "min_positive_normal": {"value": 2.2250738585072014e-308, "hex": "0010000000000000"},
+      "min_positive_subnormal": {"value": 5e-324, "hex": "0000000000000001"},
+      "max_finite": {"value": 1.7976931348623157e+308, "hex": "7fefffffffffffff"},
+      "epsilon": {"value": 2.220446049250313e-16, "hex": "3cb0000000000000"}
+    },
+    "regime_encoding": {
+      "UNKNOWN": 0.0,
+      "CRAB_CHOP": 1.0,
+      "BULL_RUSH": 2.0,
+      "BEAR_CRASH": 3.0,
+      "STEADY_GROWTH": 4.0,
+      "VOLATILE_CHOP": 5.0
+    },
+    "nan_rules": {
+      "propagation": "All operations with NaN input produce NaN output",
+      "comparisons": "All comparisons with NaN return false (including NaN == NaN)",
+      "signed_zero": "Positive and negative zero are distinct in sign bit but compare equal"
+    }
+  },
+  
+  "window_features_normal_paths": {
+    "simple_uptrend": {
+      "description": "Simple uptrend with minimal volatility",
+      "inputs": {
+        "prices": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5, 103.0, 103.5, 104.0, 104.5,
+                   105.0, 105.5, 106.0, 106.5, 107.0, 107.5, 108.0, 108.5, 109.0, 109.5],
+        "volumes": [1000.0, 1010.0, 1020.0, 1030.0, 1040.0, 1050.0, 1060.0, 1070.0, 1080.0, 1090.0,
+                    1100.0, 1110.0, 1120.0, 1130.0, 1140.0, 1150.0, 1160.0, 1170.0, 1180.0, 1190.0],
+        "window_size": 20
+      },
+      "expected": {
+        "mean_price": {"value": 104.75, "hex": "405a300000000000"},
+        "price_variance": {"value": 8.3125, "hex": "4020a00000000000"},
+        "vwap": {"value": 104.8377308707124, "hex": "405a355f45a4ae54"},
+        "latest_price": {"value": 109.5, "hex": "405b600000000000"},
+        "price_momentum": {"value": 9.5, "hex": "4023000000000000"},
+        "mean_volume": {"value": 1095.0, "hex": "4091180000000000"}
+      }
+    },
+    "simple_downtrend": {
+      "description": "Simple downtrend with minimal volatility",
+      "inputs": {
+        "window_size": 20
+      },
+      "expected": {
+        "mean_price": {"value": 123.15, "hex": "405ed33333333333"},
+        "price_variance": {"value": 2.9925, "hex": "4007f5c28f5c28f6"},
+        "vwap": {"value": 123.21214953271028, "hex": "405ed3641cac9424"},
+        "latest_price": {"value": 119.85, "hex": "405d89999999999a"},
+        "price_momentum": {"value": -6.3, "hex": "c019333333333333"},
+        "mean_volume": {"value": 4850.0, "hex": "40b2c20000000000"}
+      }
+    }
+  },
+  
+  "window_features_boundaries": {
+    "empty_window": {
+      "description": "Empty data (boundary case)",
+      "inputs": {
+        "prices": [],
+        "volumes": [],
+        "window_size": 10
+      },
+      "expected": {
+        "mean_price": {"value": "NaN", "hex": "7ff8000000000000"},
+        "price_variance": {"value": "NaN", "hex": "7ff8000000000000"},
+        "vwap": {"value": "NaN", "hex": "7ff8000000000000"},
+        "latest_price": {"value": "NaN", "hex": "7ff8000000000000"},
+        "price_momentum": {"value": "NaN", "hex": "7ff8000000000000"},
+        "mean_volume": {"value": "NaN", "hex": "7ff8000000000000"}
+      }
+    },
+    "single_point": {
+      "description": "Single data point",
+      "inputs": {
+        "prices": [100.0],
+        "volumes": [1000.0],
+        "window_size": 10
+      },
+      "expected": {
+        "mean_price": {"value": 100.0, "hex": "4059000000000000"},
+        "price_variance": {"value": 0.0, "hex": "0000000000000000"},
+        "vwap": {"value": 100.0, "hex": "4059000000000000"},
+        "latest_price": {"value": 100.0, "hex": "4059000000000000"},
+        "price_momentum": {"value": 0.0, "hex": "0000000000000000"},
+        "mean_volume": {"value": 1000.0, "hex": "408f400000000000"}
+      }
+    },
+    "zero_variance": {
+      "description": "All identical values should give zero variance",
+      "inputs": {
+        "prices": [100.0, 100.0, 100.0, 100.0, 100.0],
+        "volumes": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        "window_size": 5
+      },
+      "expected": {
+        "mean_price": {"value": 100.0, "hex": "4059000000000000"},
+        "price_variance": {"value": 0.0, "hex": "0000000000000000"},
+        "vwap": {"value": 100.0, "hex": "4059000000000000"},
+        "latest_price": {"value": 100.0, "hex": "4059000000000000"},
+        "price_momentum": {"value": 0.0, "hex": "0000000000000000"},
+        "mean_volume": {"value": 1000.0, "hex": "408f400000000000"}
+      }
+    }
+  },
+  
+  "ieee_754_corner_cases": {
+    "nan_propagation": {
+      "description": "NaN in input propagates through mean calculation",
+      "inputs": {
+        "prices": [100.0, null, 102.0],
+        "volumes": [1000.0, 1000.0, 1000.0],
+        "window_size": 3,
+        "notes": "null represents NaN in JSON"
+      },
+      "expected": {
+        "mean_price": {"value": "NaN", "hex": "7ff8000000000000"},
+        "vwap": {"value": "NaN", "hex": "7ff8000000000000"}
+      },
+      "rule_tested": "NaN propagation through arithmetic operations"
+    },
+    "infinity_arithmetic": {
+      "description": "Infinity in input propagates through calculations",
+      "inputs": {
+        "prices": [100.0, "Infinity", 102.0],
+        "volumes": [1000.0, 1000.0, 1000.0],
+        "window_size": 3
+      },
+      "expected": {
+        "mean_price": {"value": "Infinity", "hex": "7ff0000000000000"},
+        "vwap": {"value": "Infinity", "hex": "7ff0000000000000"}
+      },
+      "rule_tested": "Infinity propagation through finite + infinite = infinite"
+    },
+    "negative_infinity": {
+      "description": "Negative infinity propagates correctly",
+      "inputs": {
+        "prices": [100.0, "-Infinity", 102.0],
+        "volumes": [1000.0, 1000.0, 1000.0],
+        "window_size": 3
+      },
+      "expected": {
+        "mean_price": {"value": "-Infinity", "hex": "fff0000000000000"},
+        "vwap": {"value": "-Infinity", "hex": "fff0000000000000"}
+      },
+      "rule_tested": "Negative infinity handled correctly"
+    },
+    "zero_volume_vwap": {
+      "description": "Zero total volume produces NaN VWAP",
+      "inputs": {
+        "prices": [100.0, 101.0, 102.0],
+        "volumes": [0.0, 0.0, 0.0],
+        "window_size": 3
+      },
+      "expected": {
+        "vwap": {"value": "NaN", "hex": "7ff8000000000000"},
+        "mean_price": {"value": 101.0, "hex": "4059400000000000"}
+      },
+      "rule_tested": "Division by zero produces Infinity, but 0/0 produces NaN"
+    },
+    "signed_zero_handling": {
+      "description": "Negative zero values are handled",
+      "inputs": {
+        "prices": [100.0, "-0.0", 102.0],
+        "volumes": [1000.0, 1000.0, 1000.0],
+        "window_size": 3
+      },
+      "expected": {
+        "mean_price": {"value": 67.33333333333333, "hex": "4050d55555555555"},
+        "includes_negative_zero": true
+      },
+      "rule_tested": "Negative zero preserves sign bit in operations"
+    },
+    "subnormal_numbers": {
+      "description": "Subnormal (denormal) prices are handled",
+      "inputs": {
+        "prices": [5e-324, 1e-323, 1.5e-323],
+        "volumes": [1000.0, 1000.0, 1000.0],
+        "window_size": 3
+      },
+      "expected": {
+        "mean_price": {"value": 1e-323, "hex": "0000000000000002"},
+        "is_subnormal": true
+      },
+      "rule_tested": "Subnormal numbers computed without underflow to zero"
+    }
+  },
+  
+  "contact_2_scenarios": {
+    "window_exactly_full": {
+      "description": "Window size equals buffer capacity (2-degree boundary)",
+      "boundary_type": "capacity_boundary",
+      "inputs": {
+        "prices": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0,
+                   110.0, 111.0, 112.0, 113.0, 114.0, 115.0, 116.0, 117.0, 118.0, 119.0],
+        "volumes": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0,
+                    1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        "window_size": 20
+      },
+      "expected": {
+        "mean_price": {"value": 109.5, "hex": "405b600000000000"},
+        "price_momentum": {"value": 19.0, "hex": "4033000000000000"}
+      }
+    },
+    "ring_buffer_wrap": {
+      "description": "Ring buffer wrap-around scenario",
+      "boundary_type": "wrap_boundary",
+      "inputs": {
+        "prices": [105.0, 106.0, 107.0, 108.0, 109.0, 110.0, 111.0, 112.0, 113.0, 114.0],
+        "volumes": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        "window_size": 10,
+        "ring_buffer_size": 20,
+        "write_index": 10
+      },
+      "expected": {
+        "mean_price": {"value": 109.5, "hex": "405b600000000000"}
+      }
+    },
+    "deviation_threshold": {
+      "description": "Deviation exactly at harvest trigger threshold",
+      "boundary_type": "threshold_boundary",
+      "inputs": {
+        "values": [105.0],
+        "baselines": [100.0],
+        "harvest_trigger": 0.05
+      },
+      "expected": {
+        "deviation": {"value": 0.05, "hex": "3fb999999999999a"},
+        "harvest_candidate": {"value": 1.0, "hex": "3ff0000000000000"}
+      },
+      "note": "Exact equality at threshold triggers candidate"
+    },
+    "crash_protection_threshold": {
+      "description": "Crash protection exactly at percentage threshold",
+      "boundary_type": "threshold_boundary",
+      "inputs": {
+        "values": [95.0, 105.0],
+        "baselines": [100.0, 100.0],
+        "cp_trigger_asset_percent": 0.5,
+        "cp_trigger_min_negative_dev": -0.05
+      },
+      "expected": {
+        "declining_count": {"value": 1.0, "hex": "3ff0000000000000"},
+        "percent_declining": {"value": 0.5, "hex": "3fe0000000000000"},
+        "crash_active": {"value": 1.0, "hex": "3ff0000000000000"}
+      },
+      "note": "Exact 50% declining triggers crash protection"
+    }
+  },
+  
+  "portfolio_features_representative": {
+    "balanced_portfolio": {
+      "description": "Balanced portfolio with small deviations",
+      "inputs": {
+        "values": [102.0, 98.0, 101.0],
+        "baselines": [100.0, 100.0, 100.0],
+        "cash_balance": 5000.0,
+        "harvest_trigger": 0.05,
+        "rebalance_trigger": 0.05,
+        "cp_trigger_asset_percent": 0.5,
+        "cp_trigger_min_negative_dev": -0.1
+      },
+      "expected": {
+        "deviation_percent": {"value": 1.0, "hex": "3ff0000000000000"},
+        "deviations": [
+          {"value": 0.02, "hex": "3f947ae147ae147b"},
+          {"value": -0.02, "hex": "bf947ae147ae147b"},
+          {"value": 0.01, "hex": "3f847ae147ae147b"}
+        ],
+        "harvest_candidates": [{"value": 0.0}, {"value": 0.0}, {"value": 0.0}],
+        "rebalance_candidates": [{"value": 0.0}, {"value": 0.0}, {"value": 0.0}],
+        "crash_active": {"value": 0.0, "hex": "0000000000000000"}
+      }
+    },
+    "harvest_candidates": {
+      "description": "Portfolio with assets exceeding harvest threshold",
+      "inputs": {
+        "values": [110.0, 112.0, 95.0],
+        "baselines": [100.0, 100.0, 100.0],
+        "harvest_trigger": 0.05
+      },
+      "expected": {
+        "deviations": [
+          {"value": 0.1, "hex": "3fb999999999999a"},
+          {"value": 0.12, "hex": "3fbeb851eb851eb8"},
+          {"value": -0.05, "hex": "bf9999999999999a"}
+        ],
+        "harvest_candidates": [{"value": 1.0}, {"value": 1.0}, {"value": 0.0}],
+        "rebalance_candidates": [{"value": 0.0}, {"value": 0.0}, {"value": 1.0}]
+      }
+    }
+  },
+  
+  "defect_scan_representative": {
+    "no_defect_clean_trend": {
+      "description": "Uptrending prices with no trigger or defect",
+      "inputs": {
+        "prices": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0],
+        "rebalance_trigger": -0.05,
+        "crash_threshold": 0.01
+      },
+      "expected": {
+        "is_defective": {"value": 0.0, "hex": "0000000000000000"},
+        "max_drawdown": {"value": 0.0, "hex": "0000000000000000"},
+        "trigger_hits": {"value": 0.0, "hex": "0000000000000000"}
+      }
+    },
+    "defect_detected": {
+      "description": "Price rises then drops triggering rebalance followed by crash",
+      "inputs": {
+        "prices": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 99.0, 98.0, 97.0, 96.0],
+        "rebalance_trigger": -0.05,
+        "crash_threshold": 0.01
+      },
+      "expected": {
+        "is_defective": {"value": 1.0, "hex": "3ff0000000000000"},
+        "max_drawdown": {"value": 0.030303030303030276, "hex": "3f9f13a475a58701"},
+        "trigger_hits": {"value": 1.0, "hex": "3ff0000000000000"}
+      }
+    }
+  },
+  
+  "regime_detection_representative": {
+    "bull_rush": {
+      "description": "Strong uptrend with moderate volatility",
+      "inputs": {
+        "history_length": 100,
+        "current_price": 150.0,
+        "start_price": 100.0,
+        "characteristics": {"roi": 0.5, "volatility": 0.03}
+      },
+      "expected": {
+        "regime": {"value": 2.0, "hex": "4000000000000000", "name": "BULL_RUSH"},
+        "roi": {"value": 0.5, "hex": "3fe0000000000000"}
+      }
+    },
+    "bear_crash": {
+      "description": "Strong downtrend with moderate volatility",
+      "inputs": {
+        "history_length": 100,
+        "current_price": 90.0,
+        "start_price": 100.0,
+        "characteristics": {"roi": -0.1, "volatility": 0.03}
+      },
+      "expected": {
+        "regime": {"value": 3.0, "hex": "4008000000000000", "name": "BEAR_CRASH"}
+      }
+    },
+    "steady_growth": {
+      "description": "Slow growth with low volatility",
+      "inputs": {
+        "history_length": 100,
+        "current_price": 103.0,
+        "start_price": 100.0,
+        "characteristics": {"roi": 0.03, "volatility": 0.005}
+      },
+      "expected": {
+        "regime": {"value": 4.0, "hex": "4010000000000000", "name": "STEADY_GROWTH"}
+      }
+    },
+    "insufficient_data": {
+      "description": "Less than 50 data points",
+      "inputs": {
+        "history_length": 49,
+        "current_price": 110.0,
+        "start_price": 100.0
+      },
+      "expected": {
+        "regime": {"value": 0.0, "hex": "0000000000000000", "name": "UNKNOWN"},
+        "roi": {"value": 0.0, "hex": "0000000000000000"}
+      }
+    }
+  }
+}

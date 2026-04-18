@@ -1,0 +1,17 @@
+acceptance:
+- Dreamer can invoke the WASM kernel through a single stable adapter that owns module
+  loading, buffer reuse, worker/runtime lifecycle, and error propagation
+- Input and output transfer uses typed double buffers with zero-copy or single-copy
+  behavior verified by design, and no object-per-element marshalling in the hot path
+- A defined fallback path exists for unsupported runtimes or kernel faults without
+  changing the external Dreamer orchestration contract
+dependencies:
+- '001'
+- '002'
+- '003'
+description: Implement the actual integration layer that loads the module, allocates
+  and reuses shared/preallocated buffers, marshals state into the binary contract,
+  invokes kernels, retrieves results, and handles lifecycle concerns. This story is
+  about making the integration solid, not merely callable.
+id: '004'
+name: Create the production integration adapter between Dreamer and WASM

@@ -1,125 +1,187 @@
 completed:
 - '001'
-- '002'
-- '003'
-- '004'
-- '005'
-- '006'
-- '007'
 stories:
 - acceptance:
-  - xtrade/pom.xml exists with xchange-core, xchange-kraken, and logging dependencies
-  - mvn compile succeeds inside xtrade/
-  - A com.xtrade.Main class exists and prints a startup banner
-  - Unit test skeleton compiles and passes via mvn test
+  - A signed-off list of hot-path computations is scoped for WASM and excluded from
+    object-heavy orchestration code
+  - The call boundary defines inputs, outputs, batching shape, state handoff, error
+    semantics, and fallback behavior
+  - The integration seam makes JS responsible for orchestration only and the numeric
+    core responsible for all precision-sensitive math
   dependencies: []
-  description: Create the Maven project at $CWD/xtrade/ with proper directory structure
-    (src/main/java, src/main/resources, src/test/java), a pom.xml pulling in knowm/XChange
-    core and XChange-kraken modules (4.4.x), SLF4J/Logback for logging, and a minimal
-    'Hello XChange' main class that verifies the KrakenExchange class can be loaded.
+  description: Define the exact boundary where Dreamer hands off compute to the WASM
+    layer so the integration is stable instead of ad hoc. Identify the indicator/feature
+    transforms, batching units, state inputs, outputs, ownership of buffers, and the
+    points where JS must stop touching hot-path math.
   id: '001'
-  name: Maven Project Scaffolding and XChange Dependencies
+  name: Isolate the numeric seam from Dreamer orchestration
 - acceptance:
-  - ' AppConfig class reads KRAKEN_API_KEY, KRAKEN_API_SECRET, KRAKEN_MODE from env
-    with clear error messages if missing'
-  - 'TradingPair enum or constant list defines 5 pairs: BTC/USD, ETH/USD, XRP/USD,
-    SOL/USD, ADA/USD'
-  - application.properties contains poll-interval-seconds and initial-virtual-balance
-    defaults
-  - Unit tests verify config loading with mocked environment variables
+  - Memory layout is documented for all input, output, and scratch buffers using structure-of-arrays
+    and double-width storage
+  - JSON serialization/deserialization rules preserve exact 64-bit values for all
+    supported payloads, including edge cases such as NaN payload policy, infinities,
+    signed zero, and extremal doubles
+  - The contract states where binary transport is mandatory versus where JSON is allowed,
+    with no ambiguous precision downgrade points
   dependencies:
   - '001'
-  description: Build a configuration layer that reads KRAKEN_API_KEY and KRAKEN_API_SECRET
-    (and optional KRAKEN_MODE=sandbox|live) from environment variables, validates
-    they are present, and exposes them as an immutable config object. Also define
-    the 5 major trading pairs (BTC/USD, ETH/USD, XRP/USD, SOL/USD, ADA/USD) as an
-    enum or constant list. Add application.properties for tuneable params like poll-interval-seconds
-    and initial-virtual-balance.
+  description: Design the low-level contract for double-precision data across the
+    WASM boundary and any JSON-facing boundary. Cover contiguous Float64 layouts,
+    vector lane alignment, ring/scratch buffers, and a JSON representation that preserves
+    full 64-bit fidelity without relying on lossy JS numeric formatting.
   id: '002'
-  name: Configuration Module with Kraken Environment Variables
+  name: Specify the f64 memory model and lossless wire contract
 - acceptance:
-  - ExchangeService class connects to Kraken using XChange with credentials from AppConfig
-  - getCurrentTicker(CurrencyPair) returns a Ticker with last price, bid, ask, volume
-  - getOrderBook(CurrencyPair, depth) returns bids and asks
-  - All 5 pairs can be queried without exceptions in sandbox/live-read mode
-  - Basic retry logic handles transient network errors
+  - Core kernels compile to WebAssembly with SIMD enabled and operate entirely on
+    double-precision buffers in the hot path
+  - Reference tests confirm deterministic IEEE-754-conformant results against a scalar
+    double baseline for the targeted transforms
+  - The kernel interface matches the agreed memory contract exactly, with no JS-side
+    reshaping required inside compute loops
   dependencies:
   - '002'
-  description: Implement a service that instantiates the XChange KrakenExchange, applies
-    API credentials from the config module, and provides methods to fetch current
-    ticker prices and order-book depth for each of the 5 trading pairs. Handle rate-limit
-    awareness and basic retry/error handling. This uses Kraken's public endpoints
-    (no trades yet).
+  description: Implement the precision kernel as a dedicated WASM module whose hot
+    loops operate on f64 vectors and keep the two degrees of contact inside the native
+    numeric path. The kernel must be structured for SIMD-friendly compilation and
+    deterministic double-precision behavior.
   id: '003'
-  name: Kraken Exchange Connection and Market Data Service
+  name: Build the WASM SIMD double kernel for auto-vectorized contact math
 - acceptance:
-  - PaperTradingEngine maintains virtual USD and coin balances for all 5 pairs
-  - submitMarketOrder(pair, side, amount) executes against current ticker price and
-    updates balances
-  - Trade history is recorded with timestamp, pair, side, price, amount, fee
-  - Portfolio state (balances + open orders) is persisted to data/portfolio.json on
-    each trade
-  - Engine loads prior state from file on startup if it exists
-  - Unit tests verify buy, sell, insufficient-funds rejection, and P&L calculation
+  - Dreamer can invoke the WASM kernel through a single stable adapter that owns module
+    loading, buffer reuse, worker/runtime lifecycle, and error propagation
+  - Input and output transfer uses typed double buffers with zero-copy or single-copy
+    behavior verified by design, and no object-per-element marshalling in the hot
+    path
+  - A defined fallback path exists for unsupported runtimes or kernel faults without
+    changing the external Dreamer orchestration contract
   dependencies:
+  - '001'
+  - '002'
   - '003'
-  description: 'Build the core paper trading engine: an in-memory virtual portfolio
-    starting with a configurable USD balance, order submission (market buy/sell),
-    order tracking, trade execution against live ticker prices, and portfolio state
-    queries (balances, open positions, P&L). Persist state to a JSON file so it survives
-    restarts.'
+  description: Implement the actual integration layer that loads the module, allocates
+    and reuses shared/preallocated buffers, marshals state into the binary contract,
+    invokes kernels, retrieves results, and handles lifecycle concerns. This story
+    is about making the integration solid, not merely callable.
   id: '004'
-  name: Paper Trading Engine - Virtual Portfolio and Order Management
+  name: Create the production integration adapter between Dreamer and WASM
 - acceptance:
-  - TradingStrategy interface defined with method evaluate(tickers) -> List<Signal>
-  - Concrete strategy implementation (e.g., MovingAverageCrossoverStrategy) with configurable
-    parameters
-  - Strategy produces BUY, SELL, or HOLD signals per pair based on recent price history
-  - Price history buffer maintained per pair (last N ticks)
-  - Unit tests with canned price data produce expected signals
-  dependencies:
-  - '003'
-  description: Implement a configurable automated trading strategy (e.g., simple mean-reversion
-    or moving-average crossover) that consumes ticker data and emits buy/sell signals.
-    The strategy should be parameterized (lookback window, threshold percentages)
-    and decoupled from execution so it can be swapped later.
-  id: '005'
-  name: Automated Trading Strategy Implementation
-- acceptance:
-  - Main class bootstraps AppConfig, ExchangeService, PaperTradingEngine, and TradingStrategy
-  - ScheduledExecutorService runs the trading loop at poll-interval-seconds
-  - 'Each tick: fetch prices, evaluate strategy, execute resulting signals, log trades'
-  - Console output shows timestamped actions and portfolio summary every cycle
-  - SIGINT / graceful shutdown persists final state and logs shutdown message
-  - App runs via mvn exec:java -Dexec.mainClass=com.xtrade.Main for at least 10 cycles
-    without error
+  - The targeted Dreamer execution path consumes the WASM-backed results end to end
+    without bypassing the adapter for the promoted computations
+  - State updates, rolling windows, and batched feature production remain consistent
+    across repeated ticks/runs with the new integration
+  - Feature flags or rollout controls allow the promoted WASM path to be enabled,
+    verified, and reverted cleanly
   dependencies:
   - '004'
-  - '005'
-  description: 'Wire everything into a main application loop: a scheduled executor
-    polls market data at the configured interval, feeds it to the strategy, routes
-    signals to the paper trading engine, logs every action, and prints a portfolio
-    summary. Add graceful shutdown (persist state, close exchange). The app should
-    be runnable via mvn exec:java or java -jar.'
-  id: '006'
-  name: Scheduler, Main Loop, and Application Wiring
+  description: Replace the existing precision-sensitive computation path with the
+    new adapter inside the real Dreamer flow. Wire batching, scheduling, history/ring-buffer
+    updates, and result consumption so the WASM path is the delivered path rather
+    than an isolated module.
+  id: '005'
+  name: Integrate the kernel into the end-to-end Dreamer execution path
 - acceptance:
-  - 'PortfolioReportPrinter outputs formatted table: pair, qty, avg cost, current
-    price, unrealized P&L, total P&L'
-  - logback.xml configures both console and rolling file appender to logs/xtrade.log
-  - 'README.md covers: prerequisites, environment variable setup, build commands,
-    sample output screenshot/description'
-  - .env.example lists KRAKEN_API_KEY, KRAKEN_API_SECRET, KRAKEN_MODE with placeholder
-    values
-  - mvn package produces a runnable fat JAR in target/
+  - "End-to-end tests verify exact or policy-defined-equal roundtrips across JS\u2194\
+    WASM\u2194JSON boundaries with no silent precision loss"
+  - Integration tests prove the Dreamer pipeline uses the WASM path under normal operation
+    and falls back correctly under fault or capability checks
+  - Benchmark and regression gates confirm the promoted path meets agreed latency/throughput
+    goals and maintains portability across target engines
   dependencies:
-  - '006'
-  description: Add a summary report printer (console table of portfolio balances,
-    unrealized P&L per pair, total return). Harden logging with structured Logback
-    output (file + console appenders). Write a README.md with setup instructions (env
-    vars, mvn commands, how to interpret output). Add a .env.example file.
-  id: '007'
-  name: Reporting, Logging Hardening, and README
-task: (resume)  create a fully automated paper trading app in a java maven project  using
-  knowm/XChange to perform paper trades on KRAKEN exchange using 5 major crypto coins
-  leveraging the KRAKEN environment variables.     seat this maven project in $CWD/xtrade/
+  - '005'
+  description: Establish final release criteria proving that the integrated path preserves
+    64-bit fidelity, keeps contact math inside the double-vector kernel, and delivers
+    the intended SIMD-oriented speedup without regressions across supported runtimes.
+  id: '006'
+  name: Gate delivery with fidelity, integration, and performance verification
+task: "\u2699\uFE0F  /fanout critique there was a fanout glitch we have fixed, you\
+  \ are on the hook to deliver the working wasm precision kernel (and json serialization\
+  \ 64 bit fidelity ) the current plan was holding back on delivery of a wasm auto-vectorization\
+  \ when this is the goal.  the autovectorization + 2 degrees of contact should reside\
+  \ in double vectors with the full 64 bit preceision outside of the javascript compromises\n\
+  Re-decomposed with critique (1 rounds).\n\n============================================================\n\
+  FANOUT PLAN\n============================================================\nTask:\
+  \ dreamer 1.999 will be promotion to wasm simd 80/20 effort per     Yes \u2014 but\
+  \ the realistic JS SIMD strategy is \u201Cshape the code so the engine can optimize\
+  \ it,\u201D not \u201Chope the engine auto-vectorizes everything.\u201D\n    \n\
+  \    What I found in your repo:\n    - I do not see a dedicated JS SIMD kernel.\n\
+  \    - `dreamer/Dreamer 1.2.js` is mostly object-heavy orchestration, IPC, file\
+  \ I/O, and state machines.\n    - The actual vector-ish part in this repo is mostly\
+  \ elsewhere:\n      - Python `showdown/` uses NumPy\n      - JVM code under `mp/acapulco/`\
+  \ already has `jdk.incubator.vector` / `USE_SIMD=true`\n    \n    So for JS specifically,\
+  \ the SIMD play is:\n    \n    1. Use TypedArrays, not objects\n    - `Float32Array`\
+  \ or `Float64Array` for price/feature buffers\n    - fixed-length `Float32Array(64)`\
+  \ for feature vectors\n    - fixed-size ring buffers for history\n    - avoid arrays\
+  \ of objects like `{price, volume, ...}` in hot loops\n    \n    2. Keep hot loops\
+  \ monomorphic and branch-light\n    - one loop shape\n    - one numeric type\n \
+  \   - no mixed ints/strings/objects\n    - no polymorphic property lookups in the\
+  \ inner loop\n    \n    3. Preallocate everything\n    - output vectors\n    - temp\
+  \ scratch buffers\n    - rolling windows\n    - don\u2019t allocate per tick if\
+  \ you can avoid it\n    \n    4. Use structure-of-arrays, not array-of-structures\n\
+  \    Better:\n    - `prices[]`\n    - `volumes[]`\n    - `highs[]`\n    - `lows[]`\n\
+  \    \n    Worse:\n    - `[{price, volume, high, low}, ...]`\n    \n    5. Batch\
+  \ work\n    - process many ticks or many assets per call\n    - SIMD likes predictable\
+  \ loops over contiguous memory\n    - one symbol at a time in a tiny loop often\
+  \ won\u2019t saturate much\n    \n    6. Keep JS for orchestration, move math if\
+  \ it gets serious\n    Best options, in order:\n    - JS + TypedArrays if you want\
+  \ minimal rewrite\n    - WebAssembly SIMD if you want actual cross-runtime SIMD\n\
+  \    - native addon / Rust if you want maximum control\n    - JVM Vector API if\
+  \ you\u2019re okay moving the numeric core to Java/Kotlin\n    \n    What \u201C\
+  auto-vectorization\u201D can realistically mean in JS:\n    - V8/JSC can sometimes\
+  \ optimize tight numeric loops over TypedArrays\n    - it is not reliable enough\
+  \ to design around as a guarantee\n    - you should assume \u201Cmaybe faster,\u201D\
+  \ not \u201CSIMD happened\u201D\n    \n    For this codebase, the best JS SIMD candidate\
+  \ is not Dreamer itself.\n    It\u2019s the indicator / feature computation layer,\
+  \ specifically:\n    - rolling windows\n    - SMA / EMA / ATR / RSI / MACD style\
+  \ transforms\n    - any repeated per-bar fitness math\n    \n    Dreamer as written\
+  \ is not a good SIMD target because it\u2019s full of:\n    - dynamic objects\n\
+  \    - branchy state logic\n    - IPC\n    - file reads/writes\n    - worker orchestration\n\
+  \    \n    Practical recommendation:\n    - Leave `dreamer` as orchestration\n \
+  \   - Put all numeric hot paths into a TypedArray-based kernel\n    - If that still\
+  \ isn\u2019t enough, move that kernel to WASM SIMD\n    \n    If you want, I can\
+  \ sketch a concrete JS layout for a SIMD-friendly indicator kernel:\n    - buffer\
+  \ types\n    - function signatures\n    - worker boundary\n    - and how to keep\
+  \ it V8/Bun-friendly without overengineering it.\nStories: 5 (0 done)\n============================================================\n\
+  \n[  1/5] Story 001: Define WASM SIMD kernel interface and data contracts\n\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Specify the\
+  \ low-level interface for the WASM auto-vectorization kernel, including function\
+  \ signatures, memory layout, and how double-precision vectors map to 64-bit JSON\
+  \ fidelity. Establish the contract between JS orchestration and the WASM module.\n\
+  \  Acceptance:\n    - interface spec documented and versioned\n    - signed-off\
+  \ memory layout and vector mapping\n    - no JS-side representation loss for 64-bit\
+  \ floats\n\n[  2/5] Story 002: Implement auto-vectorized double kernels in WASM\
+  \ SIMD  (after: 001)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\n  Write the core numeric kernels in portable WASM SIMD with explicit\
+  \ double (f64) vectors, ensuring 2 degrees of contact precision and strict IEEE-754\
+  \ fidelity. Avoid JS compromises in the hot path.\n  Acceptance:\n    - kernels\
+  \ compile to WASM SIMD with verified vectorization\n    - bit-identical results\
+  \ vs reference double implementation\n    - benchmark showing 80/20 effort split\
+  \ favoring compute over orchestration\n\n[  3/5] Story 003: Add robust JSON serialization\
+  \ with 64-bit fidelity validation  (after: 001)\n\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\n  Create serialization/deserialization that\
+  \ preserves full 64-bit float precision across the JS\u2194WASM boundary and supports\
+  \ roundtrip fidelity checks. Integrate checksums and tests for edge cases.\n  Acceptance:\n\
+  \    - roundtrip fidelity tests pass for all double range values\n    - no silent\
+  \ precision loss or endianness issues\n    - serialization throughput meets real-time\
+  \ constraints\n\n[  4/5] Story 004: Wire JS orchestration to WASM kernel via typed-data\
+  \ channels  (after: 002, 003)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\n  Implement the JS side that buffers indicator inputs into Float64Array,\
+  \ posts data to the WASM module via SharedArrayBuffer or transferable buffers, and\
+  \ retrieves results with zero-copy mapping.\n  Acceptance:\n    - zero-copy transfer\
+  \ verified in runtime\n    - end-to-end latency within target SLA\n    - stable\
+  \ worker lifecycle and graceful fallback\n\n[  5/5] Story 005: Validate SIMD gains\
+  \ and regression test across engine variants  (after: 004)\n\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Run cross-engine validation\
+  \ (V8, SpiderMonkey, JavaScriptCore) with deterministic tests, property-based checks,\
+  \ and performance regression suites to confirm auto-vectorization behavior and portability.\n\
+  \  Acceptance:\n    - consistent numeric results across engines\n    - performance\
+  \ regression thresholds met\n    - CI gates for precision and vectorization coverage"

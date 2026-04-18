@@ -1,263 +1,169 @@
-# xtrade — XChange Kraken Paper Trading Client
+# xtrade
 
-A Java-based paper trading client that connects to the Kraken cryptocurrency
-exchange via the XChange library. Runs a configurable SMA-based trading
-strategy against 5 major pairs (BTC/USD, ETH/USD, XRP/USD, SOL/USD, ADA/USD)
-and tracks portfolio balances, unrealized/realized P&L, and fees in a virtual
-account.
+xtrade is the unified trading workspace. Historical Binance klines, live kline muxing, the draw-thru cache, codec agents, showdown tooling, and the paper-trading engine all run from this module.
 
----
+The legacy standalone workspace has been archived. New ingest, trading, monitoring, and operational changes belong in xtrade.
 
-## Prerequisites
+## What runs here
 
-- **Java 11** or later (OpenJDK or Oracle JDK)
-- **Maven 3.6+** (for building)
-- A Kraken account with API credentials (for live mode only; demo mode works
-  without any credentials)
+- Binance archive backfill into canonical CSV
+- Incremental day append for recent klines
+- Draw-thru in-memory kline cache with producer registration
+- Live websocket mux ingestion into the same cache
+- Paper-trading engine fed from canonical klines
+- Codec showdown and replay tooling
+- Feed health, cache metrics, and stale-producer alerting
 
----
-
-## Quick Start
-
-### 1. Clone the repository
+## Build and test
 
 ```bash
 cd xtrade
-```
-
-### 2. Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set your Kraken API credentials:
-
-```bash
-export KRAKEN_API_KEY="your_api_key"
-export KRAKEN_API_SECRET="your_api_secret"
-export KRAKEN_MODE="sandbox"   # or "live"
-```
-
-Or run in demo mode without any credentials:
-
-```bash
-# No environment variables needed — pass --demo flag
-```
-
-### 3. Build the project
-
-```bash
+mvn clean test
 mvn clean package
 ```
 
-This produces a runnable fat JAR at:
+From the repository root the active Maven modules are `binance` and `xtrade`. The archived legacy workspace is no longer part of the reactor.
 
+## Unified kline architecture
+
+The kline pipeline is built around `com.xtrade.kline.DrawThruCachingKlineFeed`.
+
+1. Producers register ownership of one or more `KlineSeriesId` streams.
+2. REST backfill providers satisfy historical cache misses through the same feed.
+3. Websocket muxers publish live bars into the same ordered per-series cache.
+4. Consumers request history or subscribe for backfill-then-live delivery.
+5. Monitoring reads feed metrics directly from the same feed instance and exports `/health` and `/metrics`.
+
+Key classes:
+
+- `DrawThruCachingKlineFeed`: cache, backfill, subscriptions, metrics
+- `KlineProducerRegistration`: producer ownership declaration
+- `BinanceArchiveFetchService`: historical archive bootstrap
+- `BinanceIncrementalFetchService`: recent REST append path
+- `BinanceKlineMuxer`: live event normalization and publication
+- `PaperTradingEngineKlineAdapter`: bridges kline closes into the paper engine
+- `KlineFeedMonitorServer`: HTTP health and Prometheus metrics endpoint
+
+Architecture detail lives in `docs/unified-kline-feed-design.md`.
+
+## Configuration
+
+Runtime configuration comes from `src/main/resources/application.properties` and environment variables.
+
+### Core trading properties
+
+- `poll-interval-seconds`
+- `initial-virtual-balance`
+
+### Binance feed properties
+
+- `binance.vision.base-url`
+- `binance.api.base-url`
+- `binance.kline.start-year`
+- `binance.kline.rate-limit-millis`
+- `xtrade.kline.cache-root`
+- `xtrade.kline.import-root`
+
+### Environment overrides
+
+- `XTRADE_BINANCE_VISION_BASE_URL`
+- `XTRADE_BINANCE_API_BASE_URL`
+- `XTRADE_BINANCE_START_YEAR`
+- `XTRADE_BINANCE_RATE_LIMIT_MILLIS`
+- `XTRADE_KLINE_CACHE_ROOT`
+- `XTRADE_KLINE_IMPORT_ROOT`
+
+Default storage layout:
+
+```text
+~/xtrade-data/
+  cache/klines/<interval>/<base>/<quote>/
+  import/klines/<interval>/<base>/<quote>/
 ```
-target/xtrade-1.0-SNAPSHOT.jar
-```
 
-### 4. Run the application
+## Binance kline CLI
 
-**Using the fat JAR:**
+`com.xtrade.kline.binance.BinanceKlineCli` provides the operational command surface.
+
+Examples:
 
 ```bash
-# Demo mode (no API credentials needed):
-java -jar target/xtrade-1.0-SNAPSHOT.jar --demo
+# Historical bootstrap
+mvn -q -DskipTests exec:java -Dexec.mainClass=com.xtrade.kline.binance.BinanceKlineCli -Dexec.args="fetch BTC USDT --interval 1m"
 
-# Live mode (requires KRAKEN_API_KEY and KRAKEN_API_SECRET):
-export KRAKEN_API_KEY="..."
-export KRAKEN_API_SECRET="..."
-export KRAKEN_MODE="sandbox"
-java -jar target/xtrade-1.0-SNAPSHOT.jar
+# Recent append
+mvn -q -DskipTests exec:java -Dexec.mainClass=com.xtrade.kline.binance.BinanceKlineCli -Dexec.args="day BTC USDT --interval 1m"
+
+# Quote expansion helper
+mvn -q -DskipTests exec:java -Dexec.mainClass=com.xtrade.kline.binance.BinanceKlineCli -Dexec.args="meta BTC ETH"
 ```
 
-**Using Maven exec plugin:**
+## Feed health and metrics
+
+`DrawThruCachingKlineFeed` exports operational state directly:
+
+- cache requests, hits, misses, and hit rate
+- backfill request count and bars loaded
+- feed latency: last, average, and max ingest latency
+- producer connectivity and last publish age
+- stale-producer alerts
+
+Expose the feed over HTTP with `KlineFeedMonitorServer`:
+
+```java
+DrawThruCachingKlineFeed feed = new DrawThruCachingKlineFeed(8192);
+KlineFeedMonitorServer monitor = KlineFeedMonitorServer.start(
+        feed,
+        new InetSocketAddress("127.0.0.1", 8088),
+        Duration.ofSeconds(90));
+```
+
+Endpoints:
+
+- `GET /health` returns JSON health status, cache statistics, and stale-producer alerts
+- `GET /metrics` returns Prometheus-compatible metrics for cache hit rate, feed latency, buffered bars, and producer connectivity
+
+Example `/health` status fields:
+
+- `status`: `OK`, `WARN`, or `CRITICAL`
+- `metrics.cacheHitRate`
+- `metrics.averageFeedLatencyMillis`
+- `metrics.producers[*].connected`
+- `alerts[*]`
+
+## Operational guide
+
+1. Start or embed the feed monitor server next to the active feed instance.
+2. Scrape `/metrics` from Prometheus.
+3. Alert when any `xtrade_kline_producer_stale` metric becomes `1`.
+4. Alert when `xtrade_kline_cache_hit_rate` drops below the expected warm-cache baseline.
+5. Treat `/health` `WARN` or `CRITICAL` as paging signals for feed freshness problems.
+
+Detailed kline feed operations runbook: `docs/kline-feed-operations-runbook.md`.
+
+## Paper trading and showdown
+
+Main entry point:
 
 ```bash
 mvn exec:java -Dexec.mainClass=com.xtrade.Main -Dexec.args="--demo"
 ```
 
----
+Showdown examples:
 
-## Environment Variables
-
-| Variable            | Required | Default    | Description                                       |
-|---------------------|----------|------------|---------------------------------------------------|
-| `KRAKEN_API_KEY`    | Live     | —          | Your Kraken API key                               |
-| `KRAKEN_API_SECRET` | Live     | —          | Your Kraken API secret                            |
-| `KRAKEN_MODE`       | No       | `sandbox`  | `sandbox` for paper trading, `live` for real API  |
-
-If `KRAKEN_API_KEY` or `KRAKEN_API_SECRET` is missing, the application
-automatically falls back to demo mode with simulated price data.
-
----
-
-## Build Commands
-
-| Command                     | Description                                |
-|-----------------------------|--------------------------------------------|
-| `mvn clean compile`         | Compile source code                        |
-| `mvn test`                  | Run all unit tests                         |
-| `mvn clean package`         | Build fat JAR with all dependencies        |
-| `mvn exec:java -Dexec.args="--demo"` | Run in demo mode via Maven       |
-
----
-
-## Application Configuration
-
-Runtime parameters are configured in `src/main/resources/application.properties`:
-
-| Property                   | Default   | Description                        |
-|----------------------------|-----------|------------------------------------|
-| `poll-interval-seconds`    | `60`      | Seconds between trading ticks      |
-| `initial-virtual-balance`  | `10000.00`| Starting USD balance (paper mode)  |
-
----
-
-## How to Interpret the Output
-
-### Console Output
-
-Each trading tick prints a summary report table to the console:
-
-```
-=====================================================================
-            PORTFOLIO SUMMARY REPORT
-            Generated: 2026-04-15T03:15:00Z
-=====================================================================
-
-  Pair         Qty      Avg Cost      Cur Price   Unrealized P&L       Total P&L
-  ----------------------------------------------------------------------------------------
-
-  BTC/USD        0.1000    $50,000.00    $50,000.00         $0.0000         -$13.0000
-  ETH/USD             -             -             -                -                -
-  XRP/USD             -             -             -                -                -
-  SOL/USD        5.0000       $100.00       $100.00         $0.0000          -$1.3000
-  ADA/USD             -             -             -                -                -
-
-  Cash Balance:       $4,486.70
-  Holdings Value:     $5,500.00
-  Total Portfolio:    $9,986.70
-
-  Unrealized P&L:     +$0.0000
-  Realized P&L:       +$0.0000
-  Total Fees Paid:   $14.3000
-  Net Total P&L:      -$14.3000
-
-  Total Trades:       2
-=====================================================================
+```bash
+java -jar target/xtrade-1.0-SNAPSHOT.jar --showdown --all-codecs --ticks 500 --simulated
+java -jar target/xtrade-1.0-SNAPSHOT.jar --showdown --codecs 1,7,14,22 --ticks 100 --simulated
 ```
 
-### Table Columns
+## Logs and outputs
 
-| Column          | Meaning                                                |
-|-----------------|--------------------------------------------------------|
-| **Pair**        | Trading pair (e.g., BTC/USD)                           |
-| **Qty**         | Quantity held; `-` if no position                      |
-| **Avg Cost**    | Weighted average cost per unit in USD                  |
-| **Cur Price**   | Current market price from last tick                    |
-| **Unrealized P&L** | (Current Price - Avg Cost) * Qty for open positions |
-| **Total P&L**   | Unrealized P&L + Realized P&L - Fees for the asset    |
+- `logs/xtrade.log`
+- `data/portfolio.json`
+- imported canonical kline CSV under `xtrade.kline.import-root`
 
-### Summary Lines
+## Repository notes
 
-- **Cash Balance**: Available USD not invested
-- **Holdings Value**: Sum of all position values at current prices
-- **Total Portfolio**: Cash + Holdings Value
-- **Net Total P&L**: Total return including all fees and realized gains/losses
-- **Total Trades**: Number of completed buy/sell transactions
-
-### Log Files
-
-Structured log output is written to both the console and a rolling log file:
-
-```
-logs/xtrade.log
-```
-
-The log file rolls over daily or when it reaches 50 MB, keeping 30 days of
-history (up to 1 GB total). Log entries include timestamps, thread names,
-log levels, and logger names for easy filtering.
-
----
-
-## Project Structure
-
-```
-xtrade/
-├── pom.xml                                  # Maven build with shade plugin
-├── .env.example                             # Environment variable template
-├── src/
-│   ├── main/
-│   │   ├── java/com/xtrade/
-│   │   │   ├── Main.java                    # Entry point, trading loop
-│   │   │   ├── AppConfig.java               # Environment & properties config
-│   │   │   ├── ExchangeConfig.java           # Kraken exchange setup
-│   │   │   ├── ExchangeService.java          # Market data API with retries
-│   │   │   ├── PaperTradingEngine.java       # Virtual trading engine
-│   │   │   ├── PortfolioReportPrinter.java   # Formatted console table output
-│   │   │   ├── PortfolioSnapshot.java        # Immutable portfolio state
-│   │   │   ├── PortfolioPosition.java        # Single position data
-│   │   │   ├── PortfolioState.java           # Serializable persistence model
-│   │   │   ├── TradingStrategy.java          # Strategy interface
-│   │   │   ├── SimpleMovingAverageStrategy.java  # SMA(3,7) crossover
-│   │   │   ├── TradingPair.java              # Enum of 5 supported pairs
-│   │   │   ├── Signal.java                   # BUY / SELL / HOLD enum
-│   │   │   ├── TradeRecord.java              # Immutable trade record
-│   │   │   └── LimitOrder.java               # Limit order with status
-│   │   └── resources/
-│   │       ├── application.properties         # Runtime configuration
-│   │       └── logback.xml                    # Logging configuration
-│   └── test/java/com/xtrade/
-│       ├── MainTest.java
-│       ├── PaperTradingEngineTest.java
-│       ├── PortfolioReportPrinterTest.java
-│       ├── AppConfigTest.java
-│       ├── ExchangeConfigTest.java
-│       ├── ExchangeServiceTest.java
-│       └── MarketDataServiceImplTest.java
-├── data/                                     # Portfolio state persistence
-│   └── portfolio.json
-└── logs/                                     # Log file output
-    └── xtrade.log
-```
-
----
-
-## Trading Strategy
-
-The default strategy is a **Simple Moving Average (SMA) crossover** using
-short-period (3) and long-period (7) windows:
-
-- **BUY** signal: Short SMA crosses above long SMA
-- **SELL** signal: Short SMA crosses below long SMA
-- **HOLD**: No crossover detected
-
-Trade size is fixed at $100 USD per signal.
-
----
-
-## Simulated Fees
-
-The paper trading engine uses a simulated **Kraken taker fee rate of 0.26%**,
-applied to both buy and sell orders.
-
----
-
-## Graceful Shutdown
-
-Press `Ctrl+C` to trigger a graceful shutdown. The engine will:
-
-1. Stop the trading scheduler
-2. Persist portfolio state to `data/portfolio.json`
-3. Print the final portfolio summary
-4. Log the shutdown event
-
-State is automatically restored on the next startup.
-
----
-
-## License
-
-Internal project — see repository root for license information.
+- Active Java development: `xtrade/`
+- Supporting Binance client module: `binance/`
+- Archived legacy workspace: `mp/` with an archive notice only

@@ -5,13 +5,11 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.TypeAdapter;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
+import com.xtrade.kline.KlineBar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * In-memory paper trading engine that maintains a virtual portfolio.
@@ -44,7 +43,7 @@ public class PaperTradingEngine {
     private static final Logger LOG = LoggerFactory.getLogger(PaperTradingEngine.class);
 
     /** Simulated Kraken taker fee rate. */
-    static final double TAKER_FEE_RATE = 0.0026;
+    public static final double TAKER_FEE_RATE = 0.0026;
 
     /** Default path for portfolio state persistence. */
     static final String DEFAULT_PERSISTENCE_PATH = "data/portfolio.json";
@@ -89,6 +88,9 @@ public class PaperTradingEngine {
         ASSET_PAIR_MAP = Collections.unmodifiableMap(m);
     }
 
+    /** Stable-quote assets treated as USD-equivalent inside the paper wallet. */
+    static final Set<String> SUPPORTED_QUOTES = Set.of("USD", "USDT", "USDC", "BUSD");
+
     /** Initial USD balance. */
     private final double startingBalance;
 
@@ -120,6 +122,12 @@ public class PaperTradingEngine {
 
     /** Completed trade history. */
     private final List<TradeRecord> tradeHistory = new ArrayList<>();
+
+    /** Fill-price model used when executing orders directly against kline bars. */
+    private volatile SlippageModel slippageModel = SlippageModel.none();
+
+    /** Latest observed bar per pair, retained across reconnects via persistence. */
+    private final Map<String, KlineBar> latestBars = new HashMap<>();
 
     /**
      * Creates a PaperTradingEngine with the default starting balance of 10,000 USD.
@@ -208,13 +216,22 @@ public class PaperTradingEngine {
      * @param pair  trading pair string, e.g. "BTC/USD"
      * @param price current market price
      */
-    public void updateMarketPrice(String pair, double price) {
+    public synchronized void updateMarketPrice(String pair, double price) {
         Objects.requireNonNull(pair, "Pair must not be null");
         if (price <= 0) {
             throw new IllegalArgumentException("Price must be positive, got: " + price);
         }
         marketPrices.put(pair, price);
+        saveState();
         LOG.debug("Price updated: {} = {}", pair, price);
+    }
+
+    public synchronized void updateFromBar(KlineBar bar) {
+        Objects.requireNonNull(bar, "bar must not be null");
+        latestBars.put(bar.seriesId().symbol(), bar);
+        marketPrices.put(bar.seriesId().symbol(), bar.closePrice().doubleValue());
+        evaluateLimitOrders(bar);
+        saveState();
     }
 
     /**
@@ -236,7 +253,16 @@ public class PaperTradingEngine {
      * @return current price, or 0.0 if not set
      */
     public double getMarketPrice(String pair) {
-        return marketPrices.getOrDefault(pair, 0.0);
+        double direct = marketPrices.getOrDefault(pair, 0.0);
+        if (direct > 0.0) {
+            return direct;
+        }
+        try {
+            String asset = validateSupportedPair(pair);
+            return marketPriceForAsset(asset);
+        } catch (IllegalArgumentException ignored) {
+            return 0.0;
+        }
     }
 
     // ======================================================================
@@ -300,25 +326,17 @@ public class PaperTradingEngine {
      * @throws IllegalArgumentException if pair is unknown, side is invalid, or amount is non-positive
      * @throws IllegalStateException    if no market price is available or insufficient funds
      */
-    public TradeRecord submitMarketOrder(String pair, String side, double amount) {
+    public synchronized TradeRecord submitMarketOrder(String pair, String side, double amount) {
         Objects.requireNonNull(pair, "Pair must not be null");
         Objects.requireNonNull(side, "Side must not be null");
         validateQuantity(amount);
 
         // Validate pair format and extract base asset
-        if (!pair.endsWith("/USD")) {
-            throw new IllegalArgumentException("Unsupported pair format: " + pair + ". Expected format: BTC/USD");
-        }
-        String asset = extractBaseAsset(pair);
+        String asset = validateSupportedPair(pair);
         validateAsset(asset);
 
         // Validate side
-        TradeRecord.Side orderSide;
-        try {
-            orderSide = TradeRecord.Side.valueOf(side.toUpperCase().trim());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid side: " + side + ". Must be BUY or SELL.");
-        }
+        TradeRecord.Side orderSide = parseSide(side);
 
         // Validate price availability
         double price = getMarketPrice(pair);
@@ -334,6 +352,26 @@ public class PaperTradingEngine {
         }
     }
 
+    public synchronized TradeRecord submitMarketOrder(String pair, String side, double amount, KlineBar bar) {
+        Objects.requireNonNull(bar, "bar must not be null");
+        Objects.requireNonNull(pair, "Pair must not be null");
+        if (!pair.equals(bar.seriesId().symbol())) {
+            throw new IllegalArgumentException("Pair " + pair + " does not match bar series " + bar.seriesId().symbol());
+        }
+        validateQuantity(amount);
+        String asset = validateSupportedPair(pair);
+        validateAsset(asset);
+        TradeRecord.Side orderSide = parseSide(side);
+        latestBars.put(pair, bar);
+        marketPrices.put(pair, bar.closePrice().doubleValue());
+        double fillPrice = slippageModel.fillPrice(orderSide, amount, bar);
+        validateFillPriceAgainstBar(orderSide, fillPrice, bar);
+        if (orderSide == TradeRecord.Side.BUY) {
+            return executeBuy(asset, pair, fillPrice, amount, Instant.ofEpochMilli(bar.eventTimeMillis()));
+        }
+        return executeSell(asset, pair, fillPrice, amount, Instant.ofEpochMilli(bar.eventTimeMillis()));
+    }
+
     // ======================================================================
     // Limit orders
     // ======================================================================
@@ -346,7 +384,7 @@ public class PaperTradingEngine {
      * @param quantity   amount to buy
      * @return the LimitOrder object (in OPEN status)
      */
-    public LimitOrder limitBuy(String asset, double limitPrice, double quantity) {
+    public synchronized LimitOrder limitBuy(String asset, double limitPrice, double quantity) {
         validateAsset(asset);
         validateQuantity(quantity);
         if (limitPrice <= 0) {
@@ -370,6 +408,7 @@ public class PaperTradingEngine {
         LimitOrder order = new LimitOrder(pair, TradeRecord.Side.BUY,
                 BigDecimal.valueOf(limitPrice), BigDecimal.valueOf(quantity));
         openOrders.add(order);
+        saveState();
         LOG.info("Limit BUY order placed: {} {} @ {} (orderID={})", quantity, asset, limitPrice, order.getOrderId());
         return order;
     }
@@ -382,7 +421,7 @@ public class PaperTradingEngine {
      * @param quantity   amount to sell
      * @return the LimitOrder object (in OPEN status)
      */
-    public LimitOrder limitSell(String asset, double limitPrice, double quantity) {
+    public synchronized LimitOrder limitSell(String asset, double limitPrice, double quantity) {
         validateAsset(asset);
         validateQuantity(quantity);
         if (limitPrice <= 0) {
@@ -403,6 +442,7 @@ public class PaperTradingEngine {
         LimitOrder order = new LimitOrder(pair, TradeRecord.Side.SELL,
                 BigDecimal.valueOf(limitPrice), BigDecimal.valueOf(quantity));
         openOrders.add(order);
+        saveState();
         LOG.info("Limit SELL order placed: {} {} @ {} (orderID={})", quantity, asset, limitPrice, order.getOrderId());
         return order;
     }
@@ -414,7 +454,7 @@ public class PaperTradingEngine {
      * @param orderId the order ID to cancel
      * @return true if the order was found and cancelled, false otherwise
      */
-    public boolean cancelOrder(String orderId) {
+    public synchronized boolean cancelOrder(String orderId) {
         Iterator<LimitOrder> it = openOrders.iterator();
         while (it.hasNext()) {
             LimitOrder order = it.next();
@@ -440,6 +480,7 @@ public class PaperTradingEngine {
                 }
 
                 it.remove();
+                saveState();
                 return true;
             }
         }
@@ -452,7 +493,7 @@ public class PaperTradingEngine {
      *
      * @return list of TradeRecords for newly filled orders
      */
-    public List<TradeRecord> evaluateLimitOrders() {
+    public synchronized List<TradeRecord> evaluateLimitOrders() {
         List<TradeRecord> filled = new ArrayList<>();
         Iterator<LimitOrder> it = openOrders.iterator();
 
@@ -461,38 +502,68 @@ public class PaperTradingEngine {
             if (order.getStatus() != LimitOrder.Status.OPEN) continue;
 
             String pair = order.getPair();
+            KlineBar bar = latestBars.get(pair);
             double currentPrice = marketPrices.getOrDefault(pair, 0.0);
-            if (currentPrice <= 0) continue;
+            if (bar == null && currentPrice <= 0) continue;
 
             boolean fill = false;
             double orderLimitPrice = order.getLimitPrice().doubleValue();
             double orderQty = order.getQuantity().doubleValue();
-            if (order.getSide() == TradeRecord.Side.BUY) {
-                // Buy limit fills when market price <= limit price
+            if (bar != null) {
+                if (order.getSide() == TradeRecord.Side.BUY) {
+                    fill = bar.lowPrice().doubleValue() <= orderLimitPrice;
+                } else {
+                    fill = bar.highPrice().doubleValue() >= orderLimitPrice;
+                }
+            } else if (order.getSide() == TradeRecord.Side.BUY) {
                 fill = currentPrice <= orderLimitPrice;
             } else {
-                // Sell limit fills when market price >= limit price
                 fill = currentPrice >= orderLimitPrice;
             }
 
             if (fill) {
                 String asset = extractBaseAsset(pair);
+                double actualPrice = currentPrice;
+                if (bar != null) {
+                    actualPrice = slippageModel.fillPrice(order.getSide(), orderQty, bar);
+                    if (order.getSide() == TradeRecord.Side.BUY) {
+                        actualPrice = Math.min(actualPrice, orderLimitPrice);
+                    } else {
+                        actualPrice = Math.max(actualPrice, orderLimitPrice);
+                    }
+                    validateFillPriceAgainstBar(order.getSide(), actualPrice, bar);
+                }
                 TradeRecord record;
                 if (order.getSide() == TradeRecord.Side.BUY) {
-                    // Cash already reserved; execute the buy at current market price
-                    // We need to handle the difference between reserved amount and actual cost
                     double reservedCash = orderLimitPrice * orderQty * (1 + TAKER_FEE_RATE);
-                    double actualGrossCost = currentPrice * orderQty;
+                    double actualGrossCost = actualPrice * orderQty;
                     double actualFee = actualGrossCost * TAKER_FEE_RATE;
                     double actualTotalCost = actualGrossCost + actualFee;
-                    // Refund the difference
                     cashBalance += (reservedCash - actualTotalCost);
-
-                    record = createBuyTradeRecord(asset, pair, currentPrice, orderQty,
-                            actualFee, actualTotalCost);
+                    double currentQty = holdings.get(asset);
+                    double currentAvgCost = averageCost.get(asset);
+                    double newQty = currentQty + orderQty;
+                    double newAvgCost = (currentQty * currentAvgCost + actualGrossCost) / newQty;
+                    holdings.put(asset, newQty);
+                    averageCost.put(asset, newAvgCost);
+                    feesPaid.put(asset, feesPaid.get(asset) + actualFee);
+                    record = createBuyTradeRecord(asset, pair, actualPrice, orderQty, actualFee, actualTotalCost,
+                            bar == null ? Instant.now() : Instant.ofEpochMilli(bar.eventTimeMillis()));
                 } else {
-                    // Asset already reserved; execute the sell at current market price
-                    record = createSellTradeRecord(asset, pair, currentPrice, orderQty);
+                    double grossProceeds = actualPrice * orderQty;
+                    double fee = grossProceeds * TAKER_FEE_RATE;
+                    double netProceeds = grossProceeds - fee;
+                    double avgCost = averageCost.get(asset);
+                    double realizedPnlForTrade = (actualPrice - avgCost) * orderQty - fee;
+                    cashBalance += netProceeds;
+                    realizedPnl.put(asset, realizedPnl.get(asset) + realizedPnlForTrade);
+                    feesPaid.put(asset, feesPaid.get(asset) + fee);
+                    if (holdings.get(asset) < 1e-12) {
+                        averageCost.put(asset, 0.0);
+                        holdings.put(asset, 0.0);
+                    }
+                    record = createSellTradeRecord(asset, pair, actualPrice, orderQty,
+                            bar == null ? Instant.now() : Instant.ofEpochMilli(bar.eventTimeMillis()));
                 }
 
                 order.markFilled();
@@ -501,11 +572,21 @@ public class PaperTradingEngine {
                 it.remove();
 
                 LOG.info("Limit order FILLED: {} {} {} @ {} (orderID={})",
-                        order.getSide(), order.getQuantity(), asset, currentPrice, order.getOrderId());
+                        order.getSide(), order.getQuantity(), asset, actualPrice, order.getOrderId());
             }
+        }
+        if (!filled.isEmpty()) {
+            saveState();
         }
 
         return filled;
+    }
+
+    public synchronized List<TradeRecord> evaluateLimitOrders(KlineBar bar) {
+        Objects.requireNonNull(bar, "bar must not be null");
+        latestBars.put(bar.seriesId().symbol(), bar);
+        marketPrices.put(bar.seriesId().symbol(), bar.closePrice().doubleValue());
+        return evaluateLimitOrders();
     }
 
     /**
@@ -532,10 +613,10 @@ public class PaperTradingEngine {
         double totalFeesPaid = 0.0;
 
         for (String asset : TRACKED_ASSETS) {
-            String pair = ASSET_PAIR_MAP.get(asset);
+            String pair = preferredPairForAsset(asset);
             double qty = holdings.get(asset);
             double avgCost = averageCost.get(asset);
-            double currentPrice = marketPrices.getOrDefault(pair, 0.0);
+            double currentPrice = marketPriceForAsset(asset);
             double assetRealizedPnl = realizedPnl.get(asset);
             double assetFeesPaid = feesPaid.get(asset);
 
@@ -628,11 +709,27 @@ public class PaperTradingEngine {
         return startingBalance;
     }
 
+    public SlippageModel getSlippageModel() {
+        return slippageModel;
+    }
+
+    public void setSlippageModel(SlippageModel slippageModel) {
+        this.slippageModel = Objects.requireNonNull(slippageModel, "slippageModel must not be null");
+    }
+
+    public synchronized KlineBar getLatestBar(String pair) {
+        return latestBars.get(pair);
+    }
+
     // ======================================================================
     // Internal execution methods
     // ======================================================================
 
     private TradeRecord executeBuy(String asset, String pair, double price, double quantity) {
+        return executeBuy(asset, pair, price, quantity, Instant.now());
+    }
+
+    private TradeRecord executeBuy(String asset, String pair, double price, double quantity, Instant timestamp) {
         double grossCost = price * quantity;
         double fee = grossCost * TAKER_FEE_RATE;
         double totalCost = grossCost + fee;
@@ -654,7 +751,7 @@ public class PaperTradingEngine {
         cashBalance -= totalCost;
         feesPaid.put(asset, feesPaid.get(asset) + fee);
 
-        TradeRecord record = createBuyTradeRecord(asset, pair, price, quantity, fee, totalCost);
+        TradeRecord record = createBuyTradeRecord(asset, pair, price, quantity, fee, totalCost, timestamp);
         tradeHistory.add(record);
 
         LOG.info("Market BUY executed: {} {} @ ${} | fee=${} | total=${}",
@@ -666,6 +763,10 @@ public class PaperTradingEngine {
     }
 
     private TradeRecord executeSell(String asset, String pair, double price, double quantity) {
+        return executeSell(asset, pair, price, quantity, Instant.now());
+    }
+
+    private TradeRecord executeSell(String asset, String pair, double price, double quantity, Instant timestamp) {
         double held = holdings.get(asset);
         if (quantity > held + 1e-12) {
             throw new IllegalStateException(String.format(
@@ -697,7 +798,7 @@ public class PaperTradingEngine {
         realizedPnl.put(asset, currentRealized + realizedPnlForTrade);
         feesPaid.put(asset, feesPaid.get(asset) + fee);
 
-        TradeRecord record = createSellTradeRecord(asset, pair, price, quantity);
+        TradeRecord record = createSellTradeRecord(asset, pair, price, quantity, timestamp);
         tradeHistory.add(record);
 
         LOG.info("Market SELL executed: {} {} @ ${} | fee=${} | net=${} | realizedPnl=${}",
@@ -711,19 +812,29 @@ public class PaperTradingEngine {
 
     private TradeRecord createBuyTradeRecord(String asset, String pair, double price,
                                               double quantity, double fee, double totalCost) {
+        return createBuyTradeRecord(asset, pair, price, quantity, fee, totalCost, Instant.now());
+    }
+
+    private TradeRecord createBuyTradeRecord(String asset, String pair, double price,
+                                              double quantity, double fee, double totalCost,
+                                              Instant timestamp) {
         return new TradeRecord(
-                Instant.now(), pair, TradeRecord.Side.BUY,
+                timestamp, pair, TradeRecord.Side.BUY,
                 BigDecimal.valueOf(price), BigDecimal.valueOf(quantity),
                 BigDecimal.valueOf(fee), BigDecimal.valueOf(totalCost)
         );
     }
 
     private TradeRecord createSellTradeRecord(String asset, String pair, double price, double quantity) {
+        return createSellTradeRecord(asset, pair, price, quantity, Instant.now());
+    }
+
+    private TradeRecord createSellTradeRecord(String asset, String pair, double price, double quantity, Instant timestamp) {
         double grossProceeds = price * quantity;
         double fee = grossProceeds * TAKER_FEE_RATE;
         double netProceeds = grossProceeds - fee;
         return new TradeRecord(
-                Instant.now(), pair, TradeRecord.Side.SELL,
+                timestamp, pair, TradeRecord.Side.SELL,
                 BigDecimal.valueOf(price), BigDecimal.valueOf(quantity),
                 BigDecimal.valueOf(fee), BigDecimal.valueOf(netProceeds)
         );
@@ -744,6 +855,58 @@ public class PaperTradingEngine {
     private void validateQuantity(double quantity) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be positive, got: " + quantity);
+        }
+    }
+
+    private TradeRecord.Side parseSide(String side) {
+        try {
+            return TradeRecord.Side.valueOf(side.toUpperCase().trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid side: " + side + ". Must be BUY or SELL.");
+        }
+    }
+
+    private String validateSupportedPair(String pair) {
+        int idx = pair.indexOf('/');
+        if (idx <= 0 || idx == pair.length() - 1) {
+            throw new IllegalArgumentException("Unsupported pair format: " + pair + ". Expected format like BTC/USD or BTC/USDT");
+        }
+        String asset = pair.substring(0, idx);
+        String quote = pair.substring(idx + 1).toUpperCase();
+        if (!SUPPORTED_QUOTES.contains(quote)) {
+            throw new IllegalArgumentException("Unsupported quote asset in pair: " + pair + ". Supported quotes: " + SUPPORTED_QUOTES);
+        }
+        return asset;
+    }
+
+    private String preferredPairForAsset(String asset) {
+        String defaultPair = ASSET_PAIR_MAP.get(asset);
+        if (marketPrices.containsKey(defaultPair)) {
+            return defaultPair;
+        }
+        for (String pair : marketPrices.keySet()) {
+            if (pair.startsWith(asset + "/") && SUPPORTED_QUOTES.contains(pair.substring(pair.indexOf('/') + 1).toUpperCase())) {
+                return pair;
+            }
+        }
+        return defaultPair;
+    }
+
+    private double marketPriceForAsset(String asset) {
+        return marketPrices.getOrDefault(preferredPairForAsset(asset), 0.0);
+    }
+
+    private void validateFillPriceAgainstBar(TradeRecord.Side side, double fillPrice, KlineBar bar) {
+        double low = bar.lowPrice().doubleValue();
+        double high = bar.highPrice().doubleValue();
+        if (fillPrice < low - 1e-9 || fillPrice > high + 1e-9) {
+            throw new IllegalArgumentException("Fill price " + fillPrice + " is outside bar range [" + low + ", " + high + "]");
+        }
+        if (side == TradeRecord.Side.BUY && fillPrice < low - 1e-9) {
+            throw new IllegalArgumentException("BUY fill cannot be below bar low");
+        }
+        if (side == TradeRecord.Side.SELL && fillPrice > high + 1e-9) {
+            throw new IllegalArgumentException("SELL fill cannot exceed bar high");
         }
     }
 
@@ -851,16 +1014,14 @@ public class PaperTradingEngine {
             if (state.getOpenOrders() != null) {
                 for (PortfolioState.LimitOrderState los : state.getOpenOrders()) {
                     LimitOrder order = new LimitOrder(
+                            los.getOrderId(),
+                            los.getCreatedAt() == null ? Instant.now() : Instant.parse(los.getCreatedAt()),
                             los.getPair(),
                             TradeRecord.Side.valueOf(los.getSide()),
                             BigDecimal.valueOf(los.getLimitPrice()),
-                            BigDecimal.valueOf(los.getQuantity())
+                            BigDecimal.valueOf(los.getQuantity()),
+                            LimitOrder.Status.valueOf(los.getStatus())
                     );
-                    if ("CANCELLED".equals(los.getStatus())) {
-                        order.markCancelled();
-                    } else if ("FILLED".equals(los.getStatus())) {
-                        order.markFilled();
-                    }
                     openOrders.add(order);
                 }
             }

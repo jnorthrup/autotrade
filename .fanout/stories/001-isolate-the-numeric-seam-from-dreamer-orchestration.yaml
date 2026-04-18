@@ -1,0 +1,14 @@
+acceptance:
+- A signed-off list of hot-path computations is scoped for WASM and excluded from
+  object-heavy orchestration code
+- The call boundary defines inputs, outputs, batching shape, state handoff, error
+  semantics, and fallback behavior
+- The integration seam makes JS responsible for orchestration only and the numeric
+  core responsible for all precision-sensitive math
+dependencies: []
+description: Define the exact boundary where Dreamer hands off compute to the WASM
+  layer so the integration is stable instead of ad hoc. Identify the indicator/feature
+  transforms, batching units, state inputs, outputs, ownership of buffers, and the
+  points where JS must stop touching hot-path math.
+id: '001'
+name: Isolate the numeric seam from Dreamer orchestration

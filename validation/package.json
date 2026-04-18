@@ -1,0 +1,48 @@
+{
+  "name": "@dreamer/kernel-validation",
+  "version": "1.0.0",
+  "description": "Comprehensive validation suite for Dreamer WASM kernel across JS engine variants",
+  "main": "js_engine_validation_suite.js",
+  "scripts": {
+    "test": "node js_engine_validation_suite.js",
+    "test:v8": "node --version && node js_engine_validation_suite.js",
+    "test:firefox": "node --version && node js_engine_validation_suite.js", 
+    "test:safari": "node --version && node js_engine_validation_suite.js",
+    "benchmark": "node benchmark_runner.js",
+    "ci:validate": "node ci_gates.js",
+    "property-tests": "node property_test_runner.js",
+    "simd-analysis": "node simd_analyzer.js",
+    "generate-report": "node report_generator.js"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "contributors": [
+    "Dreamer Kernel Team"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dreamer/kernel-validation"
+  },
+  "keywords": [
+    "wasm",
+    "validation",
+    "simd", 
+    "numerical-computing",
+    "trading",
+    "kernel",
+    "cross-engine"
+  ],
+  "devDependencies": {
+    "benchmark": "^2.1.4"
+  },
+  "files": [
+    "js_engine_validation_suite.js",
+    "benchmark_runner.js",
+    "ci_gates.js",
+    "property_test_runner.js",
+    "simd_analyzer.js",
+    "report_generator.js"
+  ]
+}

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dreamer 1.2.js Architecture Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .header {
+      margin-bottom: 1.75rem;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      background: #22d3ee;
+      border-radius: 999px;
+      animation: pulse 2s infinite;
+      box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.35);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.35); }
+      50% { opacity: 0.55; transform: scale(0.92); box-shadow: 0 0 0 10px rgba(34, 211, 238, 0); }
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      margin-left: 1.75rem;
+      max-width: 1100px;
+      line-height: 1.45;
+    }
+
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.25rem;
+      overflow-x: auto;
+      box-shadow: 0 20px 60px rgba(2, 6, 23, 0.35);
+    }
+
+    svg {
+      width: 100%;
+      min-width: 1320px;
+      display: block;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 1.75rem;
+    }
+
+    .card {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 0.75rem;
+      border: 1px solid #1e293b;
+      padding: 1.1rem 1.15rem;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.8rem;
+    }
+
+    .card-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      flex: 0 0 auto;
+    }
+
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+
+    .card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .card ul {
+      list-style: none;
+      color: #94a3b8;
+      font-size: 0.75rem;
+      line-height: 1.55;
+    }
+
+    .card li {
+      margin-bottom: 0.35rem;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 1.25rem;
+      color: #475569;
+      font-size: 0.75rem;
+    }
+
+    .label {
+      font-family: 'JetBrains Mono', monospace;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>Dreamer 1.2.js Architecture</h1>
+      </div>
+      <p class="subtitle">
+        Single-file Node.js trading bot runtime: CLI operator entry point, Robinhood API wrapper, live trading engine, regime memory, and forked Dreamer optimizer workers connected by IPC and JSON persistence.
+      </p>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1400 760" role="img" aria-label="Architecture diagram for Dreamer 1.2.js">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="1400" height="760" fill="#020617" />
+        <rect width="1400" height="760" fill="url(#grid)" opacity="0.75" />
+
+        <!-- Arrows / data flows -->
+        <line x1="190" y1="120" x2="220" y2="120" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="205" y="112" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">stdin / cycles</text>
+
+        <path d="M 190 200 L 210 200 Q 225 200 225 183" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,5" marker-end="url(#arrowhead)" />
+        <text x="174" y="190" fill="#fb7185" font-size="8" text-anchor="middle" class="label">API_KEY + PRIVATE_KEY_BASE64</text>
+
+        <line x1="400" y1="135" x2="420" y2="135" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="410" y="128" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">signed HTTPS</text>
+
+        <line x1="510" y1="190" x2="510" y2="228" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="526" y="213" fill="#94a3b8" font-size="8" class="label">portfolio / cash</text>
+
+        <line x1="600" y1="142" x2="650" y2="142" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="625" y="134" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">hydrate</text>
+
+        <line x1="650" y1="225" x2="650" y2="248" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="666" y="241" fill="#94a3b8" font-size="8" class="label">regime state</text>
+
+        <line x1="600" y1="315" x2="650" y2="315" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="625" y="307" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">save snapshot</text>
+
+        <path d="M 600 270 L 640 270 Q 655 270 655 248" fill="none" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="627" y="262" fill="#fb923c" font-size="8" text-anchor="middle" class="label">dispatchToDreamer()</text>
+
+        <line x1="840" y1="325" x2="890" y2="325" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="5,5" marker-end="url(#arrowhead)" />
+        <text x="865" y="317" fill="#fb923c" font-size="8" text-anchor="middle" class="label">process.send / on('message')</text>
+
+        <line x1="1000" y1="190" x2="1000" y2="340" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="1016" y="268" fill="#94a3b8" font-size="8" class="label">OPTIMIZATION_FOUND / HEARTBEAT / RESET_SCORE</text>
+
+        <path d="M 1000 430 L 1000 474 Q 1000 490 980 490 L 740 490 Q 720 490 720 470" fill="none" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#arrowhead)" />
+        <text x="875" y="482" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">updates live genome</text>
+
+        <path d="M 1180 190 L 1225 190 Q 1245 190 1245 210 L 1245 548" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="1260" y="314" fill="#94a3b8" font-size="8" class="label">sweep state / history</text>
+
+        <path d="M 1000 370 L 1000 540 Q 1000 552 985 552 L 980 552" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead)" />
+        <text x="1018" y="452" fill="#94a3b8" font-size="8" class="label">market_data.jsonl / trade_history.log</text>
+
+        <!-- External nodes -->
+        <rect x="40" y="90" width="150" height="60" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5" />
+        <rect x="40" y="90" width="150" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5" />
+        <text x="115" y="116" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">Operator</text>
+        <text x="115" y="132" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">terminal / readline</text>
+
+        <rect x="40" y="170" width="150" height="60" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5" />
+        <rect x="40" y="170" width="150" height="60" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" />
+        <text x="115" y="196" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">Secrets</text>
+        <text x="115" y="212" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">.env / API keys</text>
+
+        <rect x="40" y="250" width="150" height="70" rx="6" fill="#0f172a" stroke="#94a3b8" stroke-width="1.5" />
+        <rect x="40" y="250" width="150" height="70" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" />
+        <text x="115" y="277" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">Robinhood API</text>
+        <text x="115" y="293" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">https://trading.robinhood.com</text>
+        <text x="115" y="307" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">signed requests</text>
+
+        <!-- Main process boundary -->
+        <rect x="220" y="50" width="600" height="450" rx="12" fill="rgba(251, 191, 36, 0.05)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" />
+        <text x="236" y="70" fill="#fbbf24" font-size="10" font-weight="600" class="label">Main Node.js Process</text>
+        <text x="236" y="84" fill="#94a3b8" font-size="8" class="label">mainLoop() / TradingEngine / LegionManager / persistence</text>
+
+        <rect x="240" y="100" width="160" height="70" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="240" y="100" width="160" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="320" y="126" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">RobinhoodAPI</text>
+        <text x="320" y="142" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">_requestWithRetry()</text>
+        <text x="320" y="156" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">sign + timestamp + axios</text>
+
+        <rect x="430" y="80" width="170" height="110" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="430" y="80" width="170" height="110" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="515" y="108" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">mainLoop()</text>
+        <text x="515" y="126" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">load state, init API, cycle forever</text>
+        <text x="515" y="141" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">portfolioSummary → engine.update()</text>
+        <text x="515" y="156" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">heartbeat + trade orchestration</text>
+
+        <rect x="240" y="230" width="180" height="100" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="240" y="230" width="180" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="330" y="256" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">TradingEngine LIVE</text>
+        <text x="330" y="274" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">baselines / trailingState / rebalanceState</text>
+        <text x="330" y="289" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">placeBuy() / placeSell()</text>
+        <text x="330" y="304" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">getStateSnapshot() → liveEngineState.json</text>
+
+        <rect x="430" y="230" width="180" height="100" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="430" y="230" width="180" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="520" y="256" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">LegionManager</text>
+        <text x="520" y="274" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">heartbeat() / heat map / reallocate</text>
+        <text x="520" y="289" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">dispatchToDreamer()</text>
+        <text x="520" y="304" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">FEEDBACK + OPTIMIZE_ORDER</text>
+
+        <rect x="650" y="100" width="150" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="650" y="100" width="150" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="725" y="126" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">AssetRegimeManager</text>
+        <text x="725" y="142" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">configs/asset_regime_memory.json</text>
+        <text x="725" y="156" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">persistent regime memory</text>
+
+        <rect x="650" y="190" width="150" height="70" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="650" y="190" width="150" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="725" y="216" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">RegimeDetector</text>
+        <text x="725" y="232" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">analyze(history) → BULL/BEAR/CHOP</text>
+        <text x="725" y="246" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">hydrated from memory</text>
+
+        <rect x="650" y="280" width="150" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="650" y="280" width="150" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="725" y="306" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">State Snapshot</text>
+        <text x="725" y="322" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">liveEngineState.json</text>
+        <text x="725" y="336" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">baselines / genome / holdings</text>
+
+        <!-- Worker pool boundary -->
+        <rect x="860" y="50" width="500" height="450" rx="12" fill="rgba(251, 191, 36, 0.05)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4" />
+        <text x="876" y="70" fill="#fbbf24" font-size="10" font-weight="600" class="label">Forked Dreamer Grid</text>
+        <text x="876" y="84" fill="#94a3b8" font-size="8" class="label">child_process.fork(... --simulation) / ipc workers</text>
+
+        <rect x="890" y="100" width="210" height="90" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+        <rect x="890" y="100" width="210" height="90" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+        <text x="995" y="126" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">ScientificOptimizer</text>
+        <text x="995" y="142" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">GRID → MICRO_GRID → fine tune</text>
+        <text x="995" y="157" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">evaluateGenome() / handleFeedback()</text>
+        <text x="995" y="171" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">process.send() back to main</text>
+
+        <rect x="1120" y="100" width="210" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="1120" y="100" width="210" height="90" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="1225" y="126" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">SweepStateManager</text>
+        <text x="1225" y="142" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">configs/sweep_state_*.json</text>
+        <text x="1225" y="157" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">per-worker scan cursor</text>
+        <text x="1225" y="171" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">GRID / FINE_TUNE mode</text>
+
+        <rect x="890" y="220" width="210" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="890" y="220" width="210" height="90" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="995" y="246" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">TradeHistoryAnalyzer</text>
+        <text x="995" y="262" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">trade_history.log</text>
+        <text x="995" y="277" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">wins / losses / pnl stats</text>
+        <text x="995" y="291" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">slippage map synthesis</text>
+
+        <rect x="1120" y="220" width="210" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="1120" y="220" width="210" height="90" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="1225" y="246" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">Market Data Loader</text>
+        <text x="1225" y="262" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">market_data.jsonl</text>
+        <text x="1225" y="277" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">loadMarketData() / pruneData()</text>
+        <text x="1225" y="291" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">recent history window</text>
+
+        <rect x="935" y="340" width="310" height="60" rx="6" fill="#0f172a" stroke="#fb923c" stroke-width="1.5" />
+        <rect x="935" y="340" width="310" height="60" rx="6" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5" />
+        <text x="1090" y="366" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">IPC Message Bus</text>
+        <text x="1090" y="382" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">process.send / process.on('message')</text>
+
+        <!-- Storage row -->
+        <rect x="40" y="550" width="220" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="40" y="550" width="220" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="150" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">liveEngineState.json</text>
+        <text x="150" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">live genome + baselines + holdings</text>
+        <text x="150" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">written by saveState()</text>
+
+        <rect x="280" y="550" width="230" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="280" y="550" width="230" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="395" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">asset_regime_memory.json</text>
+        <text x="395" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">regime history and tiered genome memory</text>
+        <text x="395" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">loaded at startup</text>
+
+        <rect x="530" y="550" width="200" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="530" y="550" width="200" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="630" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">sweep_state_*.json</text>
+        <text x="630" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">per-worker optimizer cursor</text>
+        <text x="630" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">grid / micro-grid progress</text>
+
+        <rect x="750" y="550" width="230" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="750" y="550" width="230" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="865" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">market_data.jsonl</text>
+        <text x="865" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">historical market ticks for simulation</text>
+        <text x="865" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">pruned in-place</text>
+
+        <rect x="1000" y="550" width="190" height="70" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5" />
+        <rect x="1000" y="550" width="190" height="70" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5" />
+        <text x="1095" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">.env / secrets</text>
+        <text x="1095" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">API_KEY + PRIVATE_KEY_BASE64</text>
+        <text x="1095" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">security boundary</text>
+
+        <rect x="1210" y="550" width="150" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5" />
+        <rect x="1210" y="550" width="150" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5" />
+        <text x="1285" y="576" fill="white" font-size="12" font-weight="600" text-anchor="middle" class="label">dreamerSimCount.json</text>
+        <text x="1285" y="592" fill="#94a3b8" font-size="9" text-anchor="middle" class="label">simulation counter</text>
+        <text x="1285" y="606" fill="#94a3b8" font-size="8" text-anchor="middle" class="label">worker progress meter</text>
+
+        <!-- Legend: must sit below all boundaries -->
+        <text x="1050" y="640" fill="white" font-size="10" font-weight="600" class="label">Legend</text>
+
+        <rect x="1050" y="652" width="16" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1" />
+        <text x="1072" y="660" fill="#94a3b8" font-size="8" class="label">Frontend / CLI</text>
+
+        <rect x="1050" y="668" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1" />
+        <text x="1072" y="676" fill="#94a3b8" font-size="8" class="label">Backend / runtime logic</text>
+
+        <rect x="1050" y="684" width="16" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1" />
+        <text x="1072" y="692" fill="#94a3b8" font-size="8" class="label">Persistent state</text>
+
+        <rect x="1050" y="700" width="16" height="10" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1" />
+        <text x="1072" y="708" fill="#94a3b8" font-size="8" class="label">Security / secrets</text>
+
+        <rect x="1050" y="716" width="16" height="10" rx="2" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1" />
+        <text x="1072" y="724" fill="#94a3b8" font-size="8" class="label">IPC / message bus</text>
+
+        <rect x="1050" y="732" width="16" height="10" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1" />
+        <text x="1072" y="740" fill="#94a3b8" font-size="8" class="label">External API / data source</text>
+      </svg>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Runtime Topology</h3>
+        </div>
+        <ul>
+          <li>• <code>mainLoop()</code> initializes the process and runs the trading cycle.</li>
+          <li>• <code>TradingEngine</code> owns live portfolio state and order execution.</li>
+          <li>• <code>LegionManager</code> decides when to cull, spawn, or optimize shadows.</li>
+          <li>• <code>ScientificOptimizer</code> runs in forked simulation workers.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot violet"></div>
+          <h3>Persistence & Recovery</h3>
+        </div>
+        <ul>
+          <li>• <code>liveEngineState.json</code> snapshots baselines, holdings, and genome.</li>
+          <li>• <code>configs/asset_regime_memory.json</code> persists regime memory across restarts.</li>
+          <li>• <code>configs/sweep_state_*.json</code> preserves optimizer scan progress per worker.</li>
+          <li>• <code>market_data.jsonl</code> and <code>trade_history.log</code> feed simulations and slippage analysis.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Control & IPC Flow</h3>
+        </div>
+        <ul>
+          <li>• Environment secrets are used only for Robinhood signing and request auth.</li>
+          <li>• Worker feedback travels over <code>process.send()</code> / <code>process.on('message')</code>.</li>
+          <li>• Optimizer discoveries hot-swap into the live genome after verification.</li>
+          <li>• Regime memory hydrates the detector before each live cycle begins.</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="footer">Dreamer 1.2.js • standalone HTML/SVG architecture diagram • generated from source inspection</p>
+  </div>
+</body>
+</html>

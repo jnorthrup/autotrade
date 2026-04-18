@@ -1,0 +1,18 @@
+acceptance:
+- Consistent numeric results across V8, SpiderMonkey, and JavaScriptCore (bit-exact
+  or within defined ULP tolerance)
+- 'Performance regression thresholds met: no >10% regression vs baseline'
+- CI pipeline gates for precision, vectorization coverage, and throughput are green
+- Property-based tests for indicator correctness pass (monotonicity, boundedness,
+  known-value checks)
+- Full double-precision 2-degrees-of-contact contract validated end-to-end
+dependencies:
+- '004'
+description: Build and run a validation suite across JS engine variants (V8/Chrome,
+  SpiderMonkey/Firefox, JavaScriptCore/Safari) with deterministic reproducibility
+  tests, property-based checks for all indicator kernels, and performance regression
+  benchmarks. Establish CI gates that enforce numeric precision (bit-exact or within
+  defined ULP tolerance), SIMD vectorization coverage, and throughput thresholds.
+  Confirm the 2-degrees-of-contact double-vector precision holds consistently.
+id: '005'
+name: Cross-engine validation, regression testing, and CI gating for SIMD precision

@@ -1,5 +1,7 @@
 package com.xtrade.kline;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -10,24 +12,42 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * In-memory draw-thru caching feed that buffers live bars, backfills on demand,
- * and forwards subsequent updates to active subscribers.
+ * forwards subsequent updates to active subscribers, and exposes operational
+ * health plus metrics snapshots.
  */
 public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
     private final int maxBarsPerSeries;
+    private final Clock clock;
     private final Map<String, ProducerHandleImpl> producers = new ConcurrentHashMap<>();
+    private final Map<String, ProducerState> producerStates = new ConcurrentHashMap<>();
     private final Map<KlineSeriesId, SeriesBuffer> buffers = new ConcurrentHashMap<>();
     private final Map<KlineSeriesId, CopyOnWriteArrayList<SubscriptionImpl>> subscriptions = new ConcurrentHashMap<>();
     private final AtomicLong subscriptionSequence = new AtomicLong(1L);
+    private final AtomicLong requestCount = new AtomicLong();
+    private final AtomicLong cacheHitCount = new AtomicLong();
+    private final AtomicLong cacheMissCount = new AtomicLong();
+    private final AtomicLong backfillRequestCount = new AtomicLong();
+    private final AtomicLong backfillBarsLoaded = new AtomicLong();
+    private final AtomicLong publishedBarCount = new AtomicLong();
+    private final AtomicLong totalFeedLatencyMillis = new AtomicLong();
+    private final AtomicLong maxFeedLatencyMillis = new AtomicLong();
+    private final AtomicLong lastFeedLatencyMillis = new AtomicLong();
 
     public DrawThruCachingKlineFeed(int maxBarsPerSeries) {
+        this(maxBarsPerSeries, Clock.systemUTC());
+    }
+
+    public DrawThruCachingKlineFeed(int maxBarsPerSeries, Clock clock) {
         if (maxBarsPerSeries <= 0) {
             throw new IllegalArgumentException("maxBarsPerSeries must be positive");
         }
         this.maxBarsPerSeries = maxBarsPerSeries;
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
     }
 
     @Override
@@ -38,23 +58,29 @@ public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
         if (prior != null) {
             throw new IllegalArgumentException("producer already registered: " + registration.producerId());
         }
+        producerStates.put(registration.producerId(), new ProducerState(registration, clock.millis()));
         return handle;
     }
 
     @Override
     public List<KlineBar> requestBars(KlineBatchRequest request) {
         Objects.requireNonNull(request, "request must not be null");
+        requestCount.incrementAndGet();
         SeriesBuffer buffer = bufferFor(request.seriesId());
         List<KlineBar> cached = buffer.select(request);
         if (isSatisfied(request, cached, buffer)) {
+            cacheHitCount.incrementAndGet();
             return cached;
         }
+        cacheMissCount.incrementAndGet();
         KlineBackfillProvider provider = findBackfillProvider(request.seriesId());
         if (provider == null) {
             return cached;
         }
+        backfillRequestCount.incrementAndGet();
         List<KlineBar> loaded = provider.load(request);
         if (loaded != null && !loaded.isEmpty()) {
+            backfillBarsLoaded.addAndGet(loaded.size());
             appendBars(loaded);
         }
         return buffer.select(request);
@@ -81,10 +107,90 @@ public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
         return subscription;
     }
 
+    public KlineFeedMetricsSnapshot metricsSnapshot(Duration staleAfter) {
+        Objects.requireNonNull(staleAfter, "staleAfter must not be null");
+        long generatedAt = clock.millis();
+        List<KlineFeedProducerStatus> producerStatuses = new ArrayList<>();
+        for (ProducerState state : producerStates.values()) {
+            producerStatuses.add(state.snapshot(generatedAt, staleAfter.toMillis()));
+        }
+        producerStatuses.sort(Comparator.comparing(KlineFeedProducerStatus::producerId));
+        long totalRequests = requestCount.get();
+        long hits = cacheHitCount.get();
+        long misses = cacheMissCount.get();
+        long published = publishedBarCount.get();
+        double hitRate = totalRequests == 0L ? 1.0d : (double) hits / (double) totalRequests;
+        double avgLatency = published == 0L ? 0.0d : (double) totalFeedLatencyMillis.get() / (double) published;
+        return new KlineFeedMetricsSnapshot(
+                generatedAt,
+                staleAfter.toMillis(),
+                totalRequests,
+                hits,
+                misses,
+                hitRate,
+                backfillRequestCount.get(),
+                backfillBarsLoaded.get(),
+                published,
+                avgLatency,
+                maxFeedLatencyMillis.get(),
+                lastFeedLatencyMillis.get(),
+                buffers.size(),
+                totalBufferedBars(),
+                totalSubscriptions(),
+                maxBarsPerSeries,
+                producerStatuses);
+    }
+
+    public KlineFeedHealthReport healthReport(Duration staleAfter) {
+        KlineFeedMetricsSnapshot snapshot = metricsSnapshot(staleAfter);
+        List<String> alerts = new ArrayList<>();
+        if (snapshot.producers().isEmpty()) {
+            alerts.add("no producers registered");
+        }
+        int staleCount = 0;
+        for (KlineFeedProducerStatus producer : snapshot.producers()) {
+            if (producer.stale()) {
+                staleCount++;
+                alerts.add("producer " + producer.producerId() + " stale for " + producer.lastPublishAgeMillis() + " ms");
+            }
+        }
+        String status = alerts.isEmpty()
+                ? "OK"
+                : staleCount == snapshot.producers().size() && !snapshot.producers().isEmpty() ? "CRITICAL" : "WARN";
+        return new KlineFeedHealthReport(status, snapshot.generatedAtMillis(), snapshot, alerts);
+    }
+
+    public String prometheusMetrics(Duration staleAfter) {
+        KlineFeedMetricsSnapshot snapshot = metricsSnapshot(staleAfter);
+        StringBuilder text = new StringBuilder(1024);
+        appendMetric(text, "xtrade_kline_cache_requests_total", snapshot.cacheRequests());
+        appendMetric(text, "xtrade_kline_cache_hits_total", snapshot.cacheHits());
+        appendMetric(text, "xtrade_kline_cache_misses_total", snapshot.cacheMisses());
+        appendMetric(text, "xtrade_kline_cache_hit_rate", snapshot.cacheHitRate());
+        appendMetric(text, "xtrade_kline_backfill_requests_total", snapshot.backfillRequests());
+        appendMetric(text, "xtrade_kline_backfill_bars_total", snapshot.backfillBarsLoaded());
+        appendMetric(text, "xtrade_kline_feed_latency_millis_avg", snapshot.averageFeedLatencyMillis());
+        appendMetric(text, "xtrade_kline_feed_latency_millis_max", snapshot.maxFeedLatencyMillis());
+        appendMetric(text, "xtrade_kline_feed_latency_millis_last", snapshot.lastFeedLatencyMillis());
+        appendMetric(text, "xtrade_kline_buffered_bars", snapshot.bufferedBars());
+        appendMetric(text, "xtrade_kline_active_subscriptions", snapshot.activeSubscriptions());
+        appendMetric(text, "xtrade_kline_registered_series", snapshot.seriesCount());
+        for (KlineFeedProducerStatus producer : snapshot.producers()) {
+            String labels = "{producer_id=\"" + escapeLabel(producer.producerId()) + "\",producer_name=\""
+                    + escapeLabel(producer.producerName()) + "\"}";
+            appendMetric(text, "xtrade_kline_producer_connected" + labels, producer.connected() ? 1 : 0);
+            appendMetric(text, "xtrade_kline_producer_stale" + labels, producer.stale() ? 1 : 0);
+            appendMetric(text, "xtrade_kline_producer_last_publish_age_millis" + labels, producer.lastPublishAgeMillis());
+            appendMetric(text, "xtrade_kline_producer_published_bars_total" + labels, producer.publishedBars());
+        }
+        return text.toString();
+    }
+
     private void appendBars(Collection<KlineBar> bars) {
         for (KlineBar bar : bars) {
             SeriesBuffer buffer = bufferFor(bar.seriesId());
             buffer.upsert(bar);
+            recordPublishedBar(bar);
             CopyOnWriteArrayList<SubscriptionImpl> listeners = subscriptions.get(bar.seriesId());
             if (listeners != null && !listeners.isEmpty()) {
                 for (SubscriptionImpl listener : listeners) {
@@ -114,6 +220,46 @@ public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
             return selected.size() >= request.limit();
         }
         return buffer.covers(request, selected);
+    }
+
+    private void recordPublishedBar(KlineBar bar) {
+        publishedBarCount.incrementAndGet();
+        long latency = Math.max(0L, bar.ingestTimeMillis() - bar.eventTimeMillis());
+        lastFeedLatencyMillis.set(latency);
+        totalFeedLatencyMillis.addAndGet(latency);
+        maxFeedLatencyMillis.accumulateAndGet(latency, Math::max);
+        ProducerState state = producerStates.get(bar.producerId());
+        if (state != null) {
+            state.recordPublish(bar);
+        }
+    }
+
+    private long totalSubscriptions() {
+        long total = 0L;
+        for (CopyOnWriteArrayList<SubscriptionImpl> value : subscriptions.values()) {
+            total += value.size();
+        }
+        return total;
+    }
+
+    private long totalBufferedBars() {
+        long total = 0L;
+        for (SeriesBuffer buffer : buffers.values()) {
+            total += buffer.size();
+        }
+        return total;
+    }
+
+    private static void appendMetric(StringBuilder text, String name, double value) {
+        text.append(name).append(' ').append(value).append('\n');
+    }
+
+    private static void appendMetric(StringBuilder text, String name, long value) {
+        text.append(name).append(' ').append(value).append('\n');
+    }
+
+    private static String escapeLabel(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private final class ProducerHandleImpl implements KlineProducerHandle {
@@ -181,6 +327,41 @@ public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
 
         private boolean accepts(KlineBar bar) {
             return !closedBarsOnly || bar.closed();
+        }
+    }
+
+    private static final class ProducerState {
+        private final KlineProducerRegistration registration;
+        private final long registeredAtMillis;
+        private final AtomicLong lastPublishTimeMillis = new AtomicLong(-1L);
+        private final AtomicLong publishedBars = new AtomicLong();
+        private final AtomicBoolean seenPublish = new AtomicBoolean(false);
+
+        private ProducerState(KlineProducerRegistration registration, long registeredAtMillis) {
+            this.registration = registration;
+            this.registeredAtMillis = registeredAtMillis;
+        }
+
+        private void recordPublish(KlineBar bar) {
+            seenPublish.set(true);
+            publishedBars.incrementAndGet();
+            lastPublishTimeMillis.accumulateAndGet(bar.ingestTimeMillis(), Math::max);
+        }
+
+        private KlineFeedProducerStatus snapshot(long nowMillis, long staleAfterMillis) {
+            long lastPublish = lastPublishTimeMillis.get();
+            long age = seenPublish.get() ? Math.max(0L, nowMillis - lastPublish) : Math.max(0L, nowMillis - registeredAtMillis);
+            boolean stale = age > staleAfterMillis;
+            boolean connected = !stale;
+            return new KlineFeedProducerStatus(
+                    registration.producerId(),
+                    registration.producerName(),
+                    registration.publishedSeries().size(),
+                    lastPublish,
+                    age,
+                    publishedBars.get(),
+                    connected,
+                    stale);
         }
     }
 
@@ -265,6 +446,10 @@ public final class DrawThruCachingKlineFeed implements DrawThruKlineFeed {
                 }
             }
             return -1;
+        }
+
+        private synchronized int size() {
+            return bars.size();
         }
     }
 }

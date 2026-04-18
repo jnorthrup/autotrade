@@ -1,0 +1,19 @@
+acceptance:
+- Interface spec documented and versioned in the repo
+- SoA memory layout defined with Float64Array-aligned buffers for prices, volumes,
+  highs, lows, and feature vectors
+- Vector mapping guarantees no JS-side representation loss for 64-bit floats
+- Function signatures for all indicator kernels specified with input/output buffer
+  contracts
+- Scratch buffer and ring buffer preallocation strategy specified
+dependencies: []
+description: "Specify the low-level interface for the WASM auto-vectorization kernel\
+  \ targeting the dreamer indicator/feature computation layer. Define function signatures,\
+  \ linear memory layout using structure-of-arrays (SoA) Float64Array buffers, and\
+  \ the contract for how double-precision vectors with 2 degrees of contact map to\
+  \ full 64-bit IEEE-754 fidelity across the JS\u2194WASM boundary. Document versioned\
+  \ interface spec covering rolling-window transforms (SMA, EMA, ATR, RSI, MACD),\
+  \ vector widths, alignment requirements, and scratch buffer preallocation strategy."
+id: '001'
+name: Define WASM SIMD kernel interface, memory layout, and double-precision data
+  contracts
