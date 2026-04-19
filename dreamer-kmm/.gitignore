@@ -1,0 +1,8 @@
+.gradle/
+build/
+*.klib
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+.kotlin/
+build
