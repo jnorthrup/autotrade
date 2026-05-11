@@ -94,15 +94,14 @@ class CandleIngestor:
         if not products:
             return
         df = pd.DataFrame(products)
-        df['last_updated'] = datetime.now()
         
         # Clear and insert
         self.db.execute("DELETE FROM products")
-        for _, row in df.iterrows():
-            self.db.execute("""
-                INSERT INTO products VALUES (?, ?, ?, ?, ?)
-            """, [row['product_id'], row['base_currency'], row['quote_currency'], 
-                  row['status'], row['volume_24h']])
+        self.db.execute("""
+            INSERT INTO products
+            SELECT product_id, base_currency, quote_currency, status, volume_24h
+            FROM df
+        """)
     
     def get_existing_range(self, product_id, granularity):
         result = self.db.execute("""
