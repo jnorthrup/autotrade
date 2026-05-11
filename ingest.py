@@ -9,19 +9,15 @@ Usage:
     python3 ingest.py --pairs BTC-USD   # Specific pairs
 """
 
-import os
 import sys
 import time
 import signal
 import argparse
-import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import duckdb
-import requests
 from coinbase.rest import RESTClient
 
 sys.path.insert(0, str(Path(__file__).parent))
